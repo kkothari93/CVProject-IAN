@@ -1,8 +1,8 @@
 import os
+import time
 import numpy as np
 import tensorflow as tf
 from scipy.misc import imsave
-import time
 
 
 mb_size = 128
@@ -61,7 +61,8 @@ def discriminator(x, reuse=False):
         D_prob = tf.contrib.layers.fully_connected(
             inputs=D_f,
             num_outputs=1,
-            activation_fn=None)
+            activation_fn=tf.nn.sigmoid, 
+	    normalizer_fn = batch_norm)
 
         return D_prob, D_f
 
@@ -97,16 +98,14 @@ def generator(z):
                                         num_outputs=64,
                                         kernel_size=4,
                                         stride=1,
-                                        normalizer_fn=batch_norm,
-                                        biases_initializer=None)
+                                        normalizer_fn=batch_norm)
 
         G_h5 = tf.contrib.layers.conv2d_transpose(G_h4,
                                                   num_outputs=3,
                                                   kernel_size=4,
                                                   stride=2,
                                                   normalizer_fn=batch_norm,
-                                                  activation_fn=tf.nn.sigmoid,
-                                                  biases_initializer=None)
+                                                  activation_fn=tf.nn.sigmoid)
 
     return G_h5
 
@@ -173,11 +172,13 @@ def estimate_swd(G_logit, R_logit):
 
     return swd
 
-
+# seed is required. Does not work without this
+# /TODO: figure out why?!
 np.random.seed()
 tf.set_random_seed(np.random.randint(0, 10))
 tf.reset_default_graph()
 
+# placeholders for true and generated images
 X = tf.placeholder(tf.float32, shape=[None, 64, 64, 3])
 Z = tf.placeholder(tf.float32, shape=[None, Z_dim])
 
@@ -244,8 +245,6 @@ summary_writer = tf.summary.FileWriter(log_dir, sess.graph)
 print("Initialized variables...")
 
 
-
-
 t = time.time()
 
 """Training phase"""
@@ -254,6 +253,7 @@ for it in range(100000):
 
     if it % 1000 == 0:
 
+	# save generator output samples
         n_sample = 64
         save_sample(X_mb[:n_sample])
         Z_sample = sample_Z(n_sample, Z_dim)
@@ -269,7 +269,7 @@ for it in range(100000):
 
     # _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict={
     #                          X: X_mb, Z: Z_sample})
-    niter=25 if it%50==0  else 1
+    niter=25 if it%50==0  else 1 # run discriminator to optimality in case of WGAN
 
     for _ in range(niter):
         X_mb = data[np.random.choice(np.arange(nsamples), mb_size, replace=False)]
