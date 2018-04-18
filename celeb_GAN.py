@@ -3,13 +3,15 @@ import time
 import numpy as np
 import tensorflow as tf
 from scipy.misc import imsave
+import tensorflow.contrib.layers as tcl
 
 
 mb_size = 128
 Z_dim = 100
-dirname = 'wgan/'  # include forward slash here
-log_dir = 'LOGS_'+dirname
-ndirs =10000 # used only for swgan
+name = 'wgan_logit_test/'# include forward slash here
+dirname = 'results/'+name  
+log_dir = 'results/'+name+'LOGS/'
+ndirs = 10000  # used only for swgan
 
 
 """ Discriminator Net model """
@@ -17,11 +19,11 @@ ndirs =10000 # used only for swgan
 
 def discriminator(x, reuse=False):
     # inputs = tf.concat(axis=1, values=[x, y])
-    batch_norm = tf.contrib.layers.batch_norm
-    inputs = tf.reshape(x, (-1, 64, 64, 3))
+    batch_norm = tcl.batch_norm
+    h = tf.reshape(x, (-1, 64, 64, 3))
     with tf.variable_scope('discriminator', reuse=reuse) as scope:
-        D_h1 = tf.contrib.layers.conv2d(
-            inputs=inputs,
+        h = tcl.conv2d(
+            inputs=h,
             num_outputs=64,
             kernel_size=4,
             stride=2,
@@ -29,8 +31,8 @@ def discriminator(x, reuse=False):
             normalizer_fn=batch_norm)
         # [-1, 32, 32, 64]
 
-        D_h2 = tf.contrib.layers.conv2d(
-            inputs=D_h1,
+        h = tcl.conv2d(
+            inputs=h,
             num_outputs=128,
             kernel_size=4,
             stride=2,
@@ -38,8 +40,8 @@ def discriminator(x, reuse=False):
             normalizer_fn=batch_norm)
         # [-1, 16, 16, 128]
 
-        D_h3 = tf.contrib.layers.conv2d(
-            inputs=D_h2,
+        h = tcl.conv2d(
+            inputs=h,
             num_outputs=256,
             kernel_size=4,
             stride=2,
@@ -47,8 +49,8 @@ def discriminator(x, reuse=False):
             normalizer_fn=batch_norm)
         # [-1, 8, 8, 256]
 
-        D_h4 = tf.contrib.layers.conv2d(
-            inputs=D_h3,
+        h = tcl.conv2d(
+            inputs=h,
             num_outputs=512,
             kernel_size=4,
             stride=2,
@@ -56,58 +58,78 @@ def discriminator(x, reuse=False):
             normalizer_fn=batch_norm)
         # [-1, 4, 4, 512]
 
-        D_f = tf.contrib.layers.flatten(D_h4)
+        features = tcl.flatten(h)
 
-        D_prob = tf.contrib.layers.fully_connected(
-            inputs=D_f,
+        logit = tcl.fully_connected(
+            inputs=features,
             num_outputs=1,
-            activation_fn=tf.nn.sigmoid, 
-	    normalizer_fn = batch_norm)
+            activation_fn=tf.identity,
+            normalizer_fn=batch_norm)
 
-        return D_prob, D_f
+        return logit, features
 
 
 """ Generator Net model """
 
 
 def generator(z):
-    batch_norm = tf.contrib.layers.batch_norm
+    batch_norm = tcl.batch_norm
     # inputs = tf.concat(axis=1, values=[z, y])
-    with tf.variable_scope('generator', reuse=tf.AUTO_REUSE) as scope:
-        fc_1 = tf.contrib.layers.fully_connected(z, 4*4*512)
-        inputs = tf.reshape(fc_1, (-1, 4, 4, 512))
-        G_h1 = tf.contrib.layers.conv2d_transpose(inputs,
-                                                  num_outputs=256,
-                                                  kernel_size=4,
-                                                  stride=2,
-                                                  normalizer_fn=batch_norm)
+    with tf.variable_scope('generator', reuse=tf.AUTO_REUSE):
+        h = tcl.fully_connected(
+            inputs=z,
+            num_outputs=4*4*1024,
+            activation_fn=tf.nn.relu,
+            normalizer_fn=batch_norm)
+        
+        h = tf.reshape(h, (-1, 4, 4, 1024))
 
-        G_h2 = tf.contrib.layers.conv2d_transpose(G_h1,
-                                                  num_outputs=128,
-                                                  kernel_size=4,
-                                                  stride=2,
-                                                  normalizer_fn=batch_norm)
+        h = tcl.conv2d_transpose(h,
+                                 num_outputs=512,
+                                 kernel_size=4,
+                                 stride=2,
+                                 activation_fn=tf.nn.relu,
+                                 normalizer_fn=batch_norm)
 
-        G_h3 = tf.contrib.layers.conv2d_transpose(G_h2,
-                                                  num_outputs=64,
-                                                  kernel_size=4,
-                                                  stride=2,
-                                                  normalizer_fn=batch_norm)
+        h = tcl.conv2d_transpose(h,
+                                 num_outputs=256,
+                                 kernel_size=4,
+                                 stride=2,
+                                 activation_fn=tf.nn.relu,
+                                 normalizer_fn=batch_norm)
 
-        G_h4 = tf.contrib.layers.conv2d(G_h3,
-                                        num_outputs=64,
-                                        kernel_size=4,
-                                        stride=1,
-                                        normalizer_fn=batch_norm)
+        h = tcl.conv2d_transpose(h,
+                                 num_outputs=128,
+                                 kernel_size=4,
+                                 stride=2,
+                                 activation_fn=tf.nn.relu,
+                                 normalizer_fn=batch_norm)
 
-        G_h5 = tf.contrib.layers.conv2d_transpose(G_h4,
-                                                  num_outputs=3,
-                                                  kernel_size=4,
-                                                  stride=2,
-                                                  normalizer_fn=batch_norm,
-                                                  activation_fn=tf.nn.sigmoid)
+        h = tcl.conv2d_transpose(h,
+                                 num_outputs=64,
+                                 kernel_size=4,
+                                 stride=2,
+                                 activation_fn=tf.nn.relu,
+                                 normalizer_fn=batch_norm)
 
-    return G_h5
+        h = tcl.conv2d(h,
+                       num_outputs=64,
+                       kernel_size=4,
+                       stride=1,
+                       activation_fn=tf.nn.relu,
+                       normalizer_fn=batch_norm)
+
+        h = tcl.conv2d_transpose(h,
+                                 num_outputs=3,
+                                 kernel_size=4,
+                                 stride=1,
+                                 normalizer_fn=batch_norm,
+                                 activation_fn=tf.nn.sigmoid,
+                                 biases_initializer=None)
+        print(h.get_shape().as_list())
+
+    return h
+
 
 def save_sample(X_mb):
     """Save an example batch input image
@@ -117,30 +139,30 @@ def save_sample(X_mb):
     out_arr = X_mb.reshape(8, 8, 64, 64, 3).swapaxes(1, 2).reshape(8*64, -1, 3)
     imsave(dirname + 'sample.png', out_arr)
 
+
 def sample_Z(m, n):
-    return np.random.uniform(-1., 1., size=[m, n])
+    return np.random.uniform(low=-1, high=1, size=[m, n])
 
 
-
-
-def estimate_swd(G_logit, R_logit):
+def estimate_swd(g_feaures, r_features):
     """Estimate SWD metric"""
-    
+
     # sample random directions
     dirs = tf.random_normal(
-        (ndirs, G_logit.get_shape().as_list()[-1]), name='directions')
+        (ndirs, g_feaures.get_shape().as_list()[-1]), name='directions')
     dirs = tf.nn.l2_normalize(dirs, dim=1)
 
-    G_d = tf.matmul(dirs, tf.transpose(G_logit))
-    R_d = tf.matmul(dirs, tf.transpose(R_logit))
+    G_d = tf.matmul(dirs, tf.transpose(g_feaures))
+    R_d = tf.matmul(dirs, tf.transpose(r_features))
+    # print(G_d.get_shape().as_list())
+
     sorted_true, true_indices = tf.nn.top_k(R_d, mb_size)
     sorted_fake, fake_indices = tf.nn.top_k(G_d, mb_size)
 
-
-    ## this part taken from Ishan's code 
-    ## This is not required, but apparently this runs faster. 
-    ## /TODO: Profile both codes
-    ## (I don't understand this but it seems to work)
+    # this part taken from Ishan's code
+    # This is not required, but apparently this runs faster.
+    # /TODO: Profile both codes
+    # (I don't understand this but it seems to work)
 
     # For faster gradient computation, we do not use sorted_fake to compute
     # loss. Instead we re-order the sorted_true so that the samples from the
@@ -151,26 +173,28 @@ def estimate_swd(G_logit, R_logit):
     # It is less expensive (memory-wise) to rearrange arrays in TF.
     # Flatten the sorted_true from [batch_size, num_projections].
 
-    flat_true = tf.reshape(sorted_true, [-1])
+    # flat_true = tf.reshape(sorted_true, [-1])
 
-    # Modify the indices to reflect this transition to an array.
-    # new index = row + index
-    rows = np.asarray(
-        [mb_size * np.floor(i * 1.0 / mb_size)
-         for i in range(ndirs * mb_size)])
-    rows = rows.astype(np.int32)
+    # # Modify the indices to reflect this transition to an array.
+    # # new index = row + index
+    # rows = np.asarray(
+    #     [mb_size * np.floor(i * 1.0 / mb_size)
+    #      for i in range(ndirs * mb_size)])
+    # rows = rows.astype(np.int32)
 
-    flat_idx = tf.reshape(fake_indices, [-1, 1]) + np.reshape(rows, [-1, 1])
+    # flat_idx = tf.reshape(fake_indices, [-1, 1]) + np.reshape(rows, [-1, 1])
 
-    # The scatter operation takes care of reshaping to the rearranged matrix
-    shape = tf.constant([mb_size * ndirs])
-    rearranged_true = tf.reshape(
-        tf.scatter_nd(flat_idx, flat_true, shape),
-        [ndirs, mb_size])
+    # # The scatter operation takes care of reshaping to the rearranged matrix
+    # shape = tf.constant([mb_size * ndirs])
+    # rearranged_true = tf.reshape(
+    #     tf.scatter_nd(flat_idx, flat_true, shape),
+    #     [ndirs, mb_size])
 
-    swd = tf.reduce_mean(tf.nn.square(G_d-rearranged_true))
+    # swd = tf.reduce_mean(tf.square(G_d-rearranged_true))
+    swd = tf.reduce_mean(tf.square(sorted_true-sorted_fake))
 
     return swd
+
 
 # seed is required. Does not work without this
 # /TODO: figure out why?!
@@ -183,38 +207,38 @@ X = tf.placeholder(tf.float32, shape=[None, 64, 64, 3])
 Z = tf.placeholder(tf.float32, shape=[None, Z_dim])
 
 G_sample = generator(Z)
-D_real, D_logit_real = discriminator(X)
-D_fake, D_logit_fake = discriminator(G_sample, reuse=True)
+D_logit_r, D_features_r = discriminator(X)
+D_logit_g, D_features_g = discriminator(G_sample, reuse=True)
 
 """Standard GAN loss"""
 # D_loss_real = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
-#     logits=D_logit_real, labels=tf.ones_like(D_logit_real)))
+#     logits=D_logit_r, labels=tf.ones_like(D_logit_r)))
 # D_loss_fake = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
-#     logits=D_logit_fake, labels=tf.zeros_like(D_logit_fake)))
+#     logits=D_logit_g, labels=tf.zeros_like(D_logit_g)))
 # D_loss = D_loss_real + D_loss_fake
 
 # G_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
-#     logits=D_logit_fake, labels=tf.ones_like(D_logit_fake)))
+#     logits=D_logit_g, labels=tf.ones_like(D_logit_g)))
 
 
 """WGAN loss"""
-D_loss = -tf.reduce_mean(D_logit_real - D_logit_fake)
-G_loss = -tf.reduce_mean(D_logit_fake)
+D_loss = -tf.reduce_mean(D_logit_r - D_logit_g)
+G_loss = tf.reduce_mean(-D_logit_g)
 
 """SWDGAN loss"""
-# G_loss = estimate_swd(D_logit_fake, D_logit_real)
+# G_loss = estimate_swd(D_features_g, D_features_r)
 
 """Discriminator accuracy"""
-D_acc = tf.reduce_mean((tf.nn.sigmoid(D_real) + 1.0-tf.nn.sigmoid(D_fake))/2.0)
+D_acc = tf.reduce_mean((tf.nn.sigmoid(D_logit_r) + 1.0-tf.nn.sigmoid(D_logit_g))/2.0)
 
 """Set up training"""
 theta_D = tf.get_collection(
-    tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
+    tf.GraphKeys.GLOBAL_VARIABLES, scope='discriminator')
 theta_G = tf.get_collection(
-    tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
+    tf.GraphKeys.GLOBAL_VARIABLES, scope='generator')
 
 # required to keep the function Lipschitz continuous
-clip_D = [p.assign(tf.clip_by_value(p, -0.05, 0.05)) for p in theta_D]
+clip_D = [p.assign(tf.clip_by_value(p, -0.01, 0.01)) for p in theta_D]
 
 D_solver = tf.train.AdamOptimizer(
     learning_rate=1e-4, beta1=0.5).minimize(D_loss, var_list=theta_D)
@@ -251,11 +275,11 @@ t = time.time()
 for it in range(100000):
     X_mb = data[np.random.choice(np.arange(nsamples), mb_size, replace=False)]
 
-    if it % 1000 == 0:
+    if it % 500 == 0:
 
-	# save generator output samples
+        # save generator output samples
         n_sample = 64
-        save_sample(X_mb[:n_sample])
+        # save_sample(X_mb[:n_sample])
         Z_sample = sample_Z(n_sample, Z_dim)
         samples = sess.run(G_sample, feed_dict={Z: Z_sample})
         out_arr = samples.reshape(8, 8, 64, 64, 3).swapaxes(1, 2).reshape(
@@ -266,18 +290,22 @@ for it in range(100000):
 
     Z_sample = sample_Z(mb_size, Z_dim)
 
-
-    # _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict={
-    #                          X: X_mb, Z: Z_sample})
-    niter=25 if it%50==0  else 1 # run discriminator to optimality in case of WGAN
+    
+    # run discriminator to optimality in case of WGAN
+    niter = 100 if it < 25 == 0 or it % 500 == 0 else 1
 
     for _ in range(niter):
-        X_mb = data[np.random.choice(np.arange(nsamples), mb_size, replace=False)]
-        Z_sample = sample_Z(mb_size, Z_dim)
+        # X_mb = data[np.random.choice(
+        #     np.arange(nsamples), mb_size, replace=False)]
+        # Z_sample = sample_Z(mb_size, Z_dim)
         # CLIPPING FOR wgan
         _, D_loss_curr, _ = sess.run([D_solver, D_loss, clip_D], feed_dict={
             X: X_mb, Z: Z_sample})
 
+    # for _ in range(3):
+    #     _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict={
+    #                              X: X_mb, Z: Z_sample})
+    
     _, G_loss_curr = sess.run([G_solver, G_loss], feed_dict={
                               X: X_mb, Z: Z_sample})
 
