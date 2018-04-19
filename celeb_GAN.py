@@ -8,20 +8,25 @@ import tensorflow.contrib.layers as tcl
 
 mb_size = 128
 Z_dim = 100
-name = 'wgan_logit_test/'# include forward slash here
+name = 'retry_wgan/'# include forward slash here
 dirname = 'results/'+name  
 log_dir = 'results/'+name+'LOGS/'
 ndirs = 10000  # used only for swgan
 
-
-""" Discriminator Net model """
-
-
 def discriminator(x, reuse=False):
-    # inputs = tf.concat(axis=1, values=[x, y])
-    batch_norm = tcl.batch_norm
-    h = tf.reshape(x, (-1, 64, 64, 3))
-    with tf.variable_scope('discriminator', reuse=reuse) as scope:
+    """Discriminator Net model
+      Network to classify fake and true samples.
+      params:
+        x: Input images 
+      returns:
+        y: Unnormalized probablity of sample being real [batch size, 1]
+        h: Features from penultimate layer of discriminator 
+          [batch size, feature dim]
+    """
+    batch_norm = tcl.layer_norm
+
+    h = tf.reshape(x, [-1,64,64,3])
+    with tf.variable_scope("discriminator", reuse=reuse) as scope:
         h = tcl.conv2d(
             inputs=h,
             num_outputs=64,
@@ -29,7 +34,7 @@ def discriminator(x, reuse=False):
             stride=2,
             activation_fn=tf.nn.leaky_relu,
             normalizer_fn=batch_norm)
-        # [-1, 32, 32, 64]
+        # [32,32,64]
 
         h = tcl.conv2d(
             inputs=h,
@@ -38,7 +43,7 @@ def discriminator(x, reuse=False):
             stride=2,
             activation_fn=tf.nn.leaky_relu,
             normalizer_fn=batch_norm)
-        # [-1, 16, 16, 128]
+        # [16,16,128]
 
         h = tcl.conv2d(
             inputs=h,
@@ -47,7 +52,7 @@ def discriminator(x, reuse=False):
             stride=2,
             activation_fn=tf.nn.leaky_relu,
             normalizer_fn=batch_norm)
-        # [-1, 8, 8, 256]
+        # [8,8,256]
 
         h = tcl.conv2d(
             inputs=h,
@@ -56,26 +61,36 @@ def discriminator(x, reuse=False):
             stride=2,
             activation_fn=tf.nn.leaky_relu,
             normalizer_fn=batch_norm)
-        # [-1, 4, 4, 512]
+        # [4,4,512]
 
-        features = tcl.flatten(h)
+        # all features
+        h = tcl.flatten(h)
 
-        logit = tcl.fully_connected(
-            inputs=features,
+        # logit corresponding to the features
+        y = tcl.fully_connected(
+            inputs=h,
             num_outputs=1,
-            activation_fn=tf.identity,
-            normalizer_fn=batch_norm)
+            activation_fn=None,
+            biases_initializer=None)
 
-        return logit, features
-
-
-""" Generator Net model """
+    return y, h
 
 
-def generator(z):
+
+
+def generator(z, reuse=False):
+    """ Generator Net model 
+    params:
+        z: [batch_size, Z_dim] input
+    returns:
+        h: an artificially generated image of shape
+            [batch_size, img_size, img_size, 3]
+            with the aim to fool the network
+
+    """
     batch_norm = tcl.batch_norm
     # inputs = tf.concat(axis=1, values=[z, y])
-    with tf.variable_scope('generator', reuse=tf.AUTO_REUSE):
+    with tf.variable_scope('generator', reuse=reuse):
         h = tcl.fully_connected(
             inputs=z,
             num_outputs=4*4*1024,
@@ -113,20 +128,13 @@ def generator(z):
                                  normalizer_fn=batch_norm)
 
         h = tcl.conv2d(h,
-                       num_outputs=64,
+                       num_outputs=3,
                        kernel_size=4,
                        stride=1,
-                       activation_fn=tf.nn.relu,
-                       normalizer_fn=batch_norm)
+                       activation_fn=tf.nn.sigmoid,
+                       normalizer_fn=batch_norm,
+                       biases_initializer=None)
 
-        h = tcl.conv2d_transpose(h,
-                                 num_outputs=3,
-                                 kernel_size=4,
-                                 stride=1,
-                                 normalizer_fn=batch_norm,
-                                 activation_fn=tf.nn.sigmoid,
-                                 biases_initializer=None)
-        print(h.get_shape().as_list())
 
     return h
 
@@ -141,6 +149,7 @@ def save_sample(X_mb):
 
 
 def sample_Z(m, n):
+    """sample a (m,n) shape uniform random matrix entries from -1 to 1"""
     return np.random.uniform(low=-1, high=1, size=[m, n])
 
 
@@ -222,11 +231,13 @@ D_logit_g, D_features_g = discriminator(G_sample, reuse=True)
 
 
 """WGAN loss"""
-D_loss = -tf.reduce_mean(D_logit_r - D_logit_g)
-G_loss = tf.reduce_mean(-D_logit_g)
+D_loss_real = tf.scalar_mul(-1.0,tf.reduce_mean(D_logit_r))
+D_loss_fake = tf.reduce_mean(D_logit_g)
+D_loss = D_loss_real + D_loss_fake
+G_loss = tf.scalar_mul(-1.0, tf.reduce_mean(D_logit_g))
 
 """SWDGAN loss"""
-# G_loss = estimate_swd(D_features_g, D_features_r)
+G_loss = estimate_swd(D_features_g, D_features_r)
 
 """Discriminator accuracy"""
 D_acc = tf.reduce_mean((tf.nn.sigmoid(D_logit_r) + 1.0-tf.nn.sigmoid(D_logit_g))/2.0)
@@ -236,6 +247,12 @@ theta_D = tf.get_collection(
     tf.GraphKeys.GLOBAL_VARIABLES, scope='discriminator')
 theta_G = tf.get_collection(
     tf.GraphKeys.GLOBAL_VARIABLES, scope='generator')
+
+print('theta_D')
+print(theta_D)
+
+print('\ntheta_G')
+print(theta_G)
 
 # required to keep the function Lipschitz continuous
 clip_D = [p.assign(tf.clip_by_value(p, -0.01, 0.01)) for p in theta_D]
@@ -275,7 +292,7 @@ t = time.time()
 for it in range(100000):
     X_mb = data[np.random.choice(np.arange(nsamples), mb_size, replace=False)]
 
-    if it % 500 == 0:
+    if it % 100 == 0:
 
         # save generator output samples
         n_sample = 64
@@ -286,13 +303,15 @@ for it in range(100000):
             8*64, -1, 3)
 
         imsave(dirname + '%d.png' % it, out_arr)
+    
+    if it%10000==0: 
         saver.save(sess, log_dir+"model.ckpt", it)
 
     Z_sample = sample_Z(mb_size, Z_dim)
 
     
     # run discriminator to optimality in case of WGAN
-    niter = 100 if it < 25 == 0 or it % 500 == 0 else 1
+    niter = 100 if it < 25 == 0 or it % 500 == 0 else 3
 
     for _ in range(niter):
         # X_mb = data[np.random.choice(
@@ -302,9 +321,9 @@ for it in range(100000):
         _, D_loss_curr, _ = sess.run([D_solver, D_loss, clip_D], feed_dict={
             X: X_mb, Z: Z_sample})
 
-    # for _ in range(3):
-    #     _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict={
-    #                              X: X_mb, Z: Z_sample})
+    # for _ in range(1):
+    # _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict={
+    #                          X: X_mb, Z: Z_sample})
     
     _, G_loss_curr = sess.run([G_solver, G_loss], feed_dict={
                               X: X_mb, Z: Z_sample})
