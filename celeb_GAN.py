@@ -1,17 +1,64 @@
 import os
 import time
+import glob
 import numpy as np
 import tensorflow as tf
+import utils.inputpipe as ip
 from scipy.misc import imsave
 import tensorflow.contrib.layers as tcl
 
 
 mb_size = 128
 Z_dim = 100
-name = 'retry_wgan/'# include forward slash here
-dirname = 'results/'+name  
+name = 'moonshot_wgangp_trial/'  # include forward slash here
+dirname = 'results/'+name
 log_dir = 'results/'+name+'LOGS/'
 ndirs = 10000  # used only for swgan
+
+
+# hyperparams for loss training
+w_adv = 1
+w_img = 3
+w_feat = 1
+w_kl = 1
+w_gp = 10
+
+
+def batcher(pattern, batch_size=mb_size):
+    tfrecords_list = glob.glob(pattern)
+    batch_op = ip.get_batch_join(tfrecords_list, batch_size, shuffle=True,
+                                 num_threads=4, num_epochs=100000)
+
+    return batch_op
+
+
+def inference_subnet(x, reuse=False):
+    """Take flattened features from discriminator and infer latent variable"""
+    batch_norm = tcl.batch_norm
+    h = x
+    with tf.variable_scope('inference_subnet', reuse=reuse):
+        h = tcl.fully_connected(
+            inputs=h,
+            num_outputs=5*Z_dim,
+            activation_fn=tf.nn.relu,
+            normalizer_fn=batch_norm)
+
+        mean = tcl.fully_connected(
+            inputs=h,
+            num_outputs=Z_dim,
+            activation_fn=None,
+            biases_initializer=None)
+
+        log_sigma_2 = tcl.fully_connected(
+            inputs=h,
+            num_outputs=Z_dim,
+            activation_fn=None,
+            biases_initializer=None)
+
+        eps = tf.random_normal((mb_size, Z_dim))
+
+        return mean + eps*tf.sqrt(tf.exp(log_sigma_2)), mean, log_sigma_2
+
 
 def discriminator(x, reuse=False):
     """Discriminator Net model
@@ -25,9 +72,9 @@ def discriminator(x, reuse=False):
     """
     batch_norm = tcl.layer_norm
 
-    h = tf.reshape(x, [-1,64,64,3])
+    h = tf.reshape(x, [-1, 64, 64, 3])
     with tf.variable_scope("discriminator", reuse=reuse) as scope:
-        h = tcl.conv2d(
+        h1 = tcl.conv2d(
             inputs=h,
             num_outputs=64,
             kernel_size=4,
@@ -36,8 +83,8 @@ def discriminator(x, reuse=False):
             normalizer_fn=batch_norm)
         # [32,32,64]
 
-        h = tcl.conv2d(
-            inputs=h,
+        h2 = tcl.conv2d(
+            inputs=h1,
             num_outputs=128,
             kernel_size=4,
             stride=2,
@@ -45,8 +92,8 @@ def discriminator(x, reuse=False):
             normalizer_fn=batch_norm)
         # [16,16,128]
 
-        h = tcl.conv2d(
-            inputs=h,
+        h3 = tcl.conv2d(
+            inputs=h2,
             num_outputs=256,
             kernel_size=4,
             stride=2,
@@ -54,8 +101,8 @@ def discriminator(x, reuse=False):
             normalizer_fn=batch_norm)
         # [8,8,256]
 
-        h = tcl.conv2d(
-            inputs=h,
+        h4 = tcl.conv2d(
+            inputs=h3,
             num_outputs=512,
             kernel_size=4,
             stride=2,
@@ -63,19 +110,19 @@ def discriminator(x, reuse=False):
             normalizer_fn=batch_norm)
         # [4,4,512]
 
+        conv_features = [h1, h2, h3, h4]
+
         # all features
-        h = tcl.flatten(h)
+        h5 = tcl.flatten(h4)
 
         # logit corresponding to the features
         y = tcl.fully_connected(
-            inputs=h,
+            inputs=h5,
             num_outputs=1,
             activation_fn=None,
             biases_initializer=None)
 
-    return y, h
-
-
+    return y, h5, conv_features
 
 
 def generator(z, reuse=False):
@@ -85,7 +132,7 @@ def generator(z, reuse=False):
     returns:
         h: an artificially generated image of shape
             [batch_size, img_size, img_size, 3]
-            with the aim to fool the network
+            with the aim to fool the discriminator network
 
     """
     batch_norm = tcl.batch_norm
@@ -96,7 +143,7 @@ def generator(z, reuse=False):
             num_outputs=4*4*1024,
             activation_fn=tf.nn.relu,
             normalizer_fn=batch_norm)
-        
+
         h = tf.reshape(h, (-1, 4, 4, 1024))
 
         h = tcl.conv2d_transpose(h,
@@ -134,7 +181,6 @@ def generator(z, reuse=False):
                        activation_fn=tf.nn.sigmoid,
                        normalizer_fn=batch_norm,
                        biases_initializer=None)
-
 
     return h
 
@@ -214,10 +260,53 @@ tf.reset_default_graph()
 # placeholders for true and generated images
 X = tf.placeholder(tf.float32, shape=[None, 64, 64, 3])
 Z = tf.placeholder(tf.float32, shape=[None, Z_dim])
+orig = tf.placeholder(tf.float32, shape=[None, 64, 64, 3])
 
-G_sample = generator(Z)
-D_logit_r, D_features_r = discriminator(X)
-D_logit_g, D_features_g = discriminator(G_sample, reuse=True)
+# pass original though inference
+_, D_f_orig, D_conv_features_orig = discriminator(orig)
+latent, mean, log_sigma_2 = inference_subnet(D_f_orig)
+
+G_sample = generator(latent)
+
+"""Improved WGAN with GP"""
+# Interpolation space
+eps = tf.random_uniform((mb_size, 1, 1, 1))
+interp = eps*orig + (1.0-eps)*G_sample
+
+D_logit_i, D_features_i, _ = discriminator(interp, reuse=True)
+grad_D_logit_i = tf.gradients([D_logit_i], [interp], name='wgan-grad')[0]
+grad_D_logit_i = tcl.flatten(grad_D_logit_i)
+norm_grad = tf.norm(grad_D_logit_i, axis=1)
+print(norm_grad.get_shape().as_list())
+
+G_example = generator(Z, reuse=True)
+D_logit_r, D_features_r, D_conv_features_r = discriminator(orig, reuse=True)
+D_logit_g, D_features_g, D_conv_features_g = discriminator(
+    G_sample, reuse=True)
+
+
+"""Wasserstein gradient penalty loss"""
+loss_gp = tf.reduce_mean(tf.square(norm_grad - 1.0))
+tf.summary.scalar('loss_gp', loss_gp)
+
+"""IAN losses eqn 3"""
+
+# loss_img = tf.reduce_mean(tf.reduce_sum(
+#     tcl.flatten(tf.abs(orig - G_sample)),axis=1))
+loss_img = tf.reduce_mean(tf.abs(orig - G_sample))
+tf.summary.scalar('loss_img', loss_img)
+
+
+loss_feature = 0
+for i in range(len(D_conv_features_g)):
+    loss_feature += tf.reduce_mean(tf.square(D_conv_features_g[i] -
+                                             D_conv_features_orig[i]))
+tf.summary.scalar('loss_feature', loss_feature)
+
+loss_kl = tf.reduce_mean(-log_sigma_2/2.0 +
+                         (tf.square(mean) + tf.exp(log_sigma_2))/2.0)
+tf.summary.scalar('loss_kl', loss_kl)
+
 
 """Standard GAN loss"""
 # D_loss_real = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
@@ -226,41 +315,52 @@ D_logit_g, D_features_g = discriminator(G_sample, reuse=True)
 #     logits=D_logit_g, labels=tf.zeros_like(D_logit_g)))
 # D_loss = D_loss_real + D_loss_fake
 
+
 # G_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
 #     logits=D_logit_g, labels=tf.ones_like(D_logit_g)))
 
 
 """WGAN loss"""
-D_loss_real = tf.scalar_mul(-1.0,tf.reduce_mean(D_logit_r))
+D_loss_real = tf.scalar_mul(-1.0, tf.reduce_mean(D_logit_r))
 D_loss_fake = tf.reduce_mean(D_logit_g)
-D_loss = D_loss_real + D_loss_fake
-G_loss = tf.scalar_mul(-1.0, tf.reduce_mean(D_logit_g))
+D_loss = D_loss_real + D_loss_fake + w_gp*loss_gp
+G_loss = -D_loss_fake
 
 """SWDGAN loss"""
-G_loss = estimate_swd(D_features_g, D_features_r)
+# G_loss = estimate_swd(D_features_g, D_features_r)
+
+"""Total loss"""
+tot_loss = w_adv*D_loss + w_img*loss_img + w_feat*loss_feature + w_kl*loss_kl
+
+tf.summary.scalar('Generator loss', G_loss)
+tf.summary.scalar('Adverserial loss', D_loss)
+tf.summary.scalar('total loss', tot_loss)
 
 """Discriminator accuracy"""
-D_acc = tf.reduce_mean((tf.nn.sigmoid(D_logit_r) + 1.0-tf.nn.sigmoid(D_logit_g))/2.0)
+D_acc = tf.reduce_mean(
+    (tf.nn.sigmoid(D_logit_r) + 1.0-tf.nn.sigmoid(D_logit_g))/2.0)
 
 """Set up training"""
 theta_D = tf.get_collection(
     tf.GraphKeys.GLOBAL_VARIABLES, scope='discriminator')
 theta_G = tf.get_collection(
     tf.GraphKeys.GLOBAL_VARIABLES, scope='generator')
+theta_inet = tf.get_collection(
+    tf.GraphKeys.GLOBAL_VARIABLES, scope='inference_subnet')
 
-print('theta_D')
-print(theta_D)
-
-print('\ntheta_G')
-print(theta_G)
 
 # required to keep the function Lipschitz continuous
 clip_D = [p.assign(tf.clip_by_value(p, -0.01, 0.01)) for p in theta_D]
 
 D_solver = tf.train.AdamOptimizer(
-    learning_rate=1e-4, beta1=0.5).minimize(D_loss, var_list=theta_D)
+    learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(D_loss,
+                                                       var_list=theta_D)
 G_solver = tf.train.AdamOptimizer(
-    learning_rate=1e-4, beta1=0.5).minimize(G_loss, var_list=theta_G)
+    learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(G_loss,
+                                                       var_list=theta_G)
+tot_optimizer = tf.train.AdamOptimizer(
+    learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(tot_loss,
+                                                       var_list=theta_inet)
 
 
 if not os.path.exists(dirname):
@@ -272,44 +372,56 @@ if not os.path.exists(log_dir):
 
 saver = tf.train.Saver()
 
-data = np.load('../swdgan/small_celeb_batch.npy')
-nsamples = len(data)
+pattern_data = './data/celebA_tfrecords/celeba*'
+batch_op = batcher(pattern_data, mb_size)
+# data = np.load('../swdgan/small_celeb_batch.npy')
+# nsamples = len(data)
 
 config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
 sess = tf.Session(config=config)
 
+summary_op = tf.summary.merge_all()
+
 sess.run(tf.global_variables_initializer())
+sess.run(tf.local_variables_initializer())
+coord = tf.train.Coordinator()
+threads = tf.train.start_queue_runners(coord=coord, sess=sess)
 
 summary_writer = tf.summary.FileWriter(log_dir, sess.graph)
 
 print("Initialized variables...")
-
-
 t = time.time()
 
 """Training phase"""
 for it in range(100000):
-    X_mb = data[np.random.choice(np.arange(nsamples), mb_size, replace=False)]
+    # orig_mb = data[np.random.choice(np.arange(nsamples), mb_size, replace=False)]
+    orig_mb = sess.run(batch_op)
+
+    if coord.should_stop():
+        break
 
     if it % 100 == 0:
 
         # save generator output samples
         n_sample = 64
-        # save_sample(X_mb[:n_sample])
+        # save_sample(orig_mb[:n_sample])
         Z_sample = sample_Z(n_sample, Z_dim)
-        samples = sess.run(G_sample, feed_dict={Z: Z_sample})
+        samples = sess.run(G_example, feed_dict={Z: Z_sample})
         out_arr = samples.reshape(8, 8, 64, 64, 3).swapaxes(1, 2).reshape(
             8*64, -1, 3)
 
         imsave(dirname + '%d.png' % it, out_arr)
-    
-    if it%10000==0: 
+
+        # summaries
+        summary = sess.run(summary_op, feed_dict={orig: orig_mb})
+        summary_writer.add_summary(summary, it)
+
+    if (it+1) % 10000 == 0:
         saver.save(sess, log_dir+"model.ckpt", it)
 
     Z_sample = sample_Z(mb_size, Z_dim)
 
-    
     # run discriminator to optimality in case of WGAN
     niter = 100 if it < 25 == 0 or it % 500 == 0 else 3
 
@@ -318,23 +430,26 @@ for it in range(100000):
         #     np.arange(nsamples), mb_size, replace=False)]
         # Z_sample = sample_Z(mb_size, Z_dim)
         # CLIPPING FOR wgan
-        _, D_loss_curr, _ = sess.run([D_solver, D_loss, clip_D], feed_dict={
-            X: X_mb, Z: Z_sample})
+        _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict={
+            orig: orig_mb, Z: Z_sample})
 
-    # for _ in range(1):
     # _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict={
-    #                          X: X_mb, Z: Z_sample})
-    
+    #                          orig: orig_mb, Z: Z_sample})
+
     _, G_loss_curr = sess.run([G_solver, G_loss], feed_dict={
-                              X: X_mb, Z: Z_sample})
+                              orig: orig_mb, Z: Z_sample})
+
+    _, tot_loss_curr = sess.run(
+        [tot_optimizer, tot_loss], feed_dict={orig: orig_mb})
 
     if it % 50 == 0:
         d_acc = sess.run(D_acc, feed_dict={
-            X: X_mb, Z: Z_sample})
+            orig: orig_mb, Z: Z_sample})
         print('Took %f s' % (time.time() - t))
         print("#####################")
         print('Iter: {}'.format(it))
         print('D loss: {:.4}'. format(D_loss_curr))
         print('G_loss: {:.4}'.format(G_loss_curr))
         print('D_acc: {:.4}'.format(d_acc))
+        print('tot_loss: {:.4}'.format(tot_loss_curr))
         t = time.time()
