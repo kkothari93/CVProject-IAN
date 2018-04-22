@@ -267,11 +267,13 @@ _, D_f_orig, D_conv_features_orig = discriminator(orig)
 latent, mean, log_sigma_2 = inference_subnet(D_f_orig)
 
 G_sample = generator(latent)
+G_example = generator(Z, reuse=True)
+print(G_example.get_shape().as_list())
 
 """Improved WGAN with GP"""
 # Interpolation space
 eps = tf.random_uniform((mb_size, 1, 1, 1))
-interp = eps*orig + (1.0-eps)*G_sample
+interp = eps*orig + (1.0-eps)*G_example
 
 D_logit_i, D_features_i, _ = discriminator(interp, reuse=True)
 grad_D_logit_i = tf.gradients([D_logit_i], [interp], name='wgan-grad')[0]
@@ -279,10 +281,9 @@ grad_D_logit_i = tcl.flatten(grad_D_logit_i)
 norm_grad = tf.norm(grad_D_logit_i, axis=1)
 print(norm_grad.get_shape().as_list())
 
-G_example = generator(Z, reuse=True)
 D_logit_r, D_features_r, D_conv_features_r = discriminator(orig, reuse=True)
 D_logit_g, D_features_g, D_conv_features_g = discriminator(
-    G_sample, reuse=True)
+    G_example, reuse=True)
 
 
 """Wasserstein gradient penalty loss"""
@@ -331,7 +332,6 @@ G_loss = -D_loss_fake
 
 """Total loss"""
 tot_loss = w_adv*D_loss + w_img*loss_img + w_feat*loss_feature + w_kl*loss_kl
-
 tf.summary.scalar('Generator loss', G_loss)
 tf.summary.scalar('Adverserial loss', D_loss)
 tf.summary.scalar('total loss', tot_loss)
@@ -373,7 +373,7 @@ if not os.path.exists(log_dir):
 saver = tf.train.Saver()
 
 pattern_data = './data/celebA_tfrecords/celeba*'
-batch_op = batcher(pattern_data, mb_size)
+batch_op = batcher(pattern_data, batch_size=mb_size)
 # data = np.load('../swdgan/small_celeb_batch.npy')
 # nsamples = len(data)
 
@@ -393,7 +393,7 @@ summary_writer = tf.summary.FileWriter(log_dir, sess.graph)
 print("Initialized variables...")
 t = time.time()
 
-"""Training phase"""
+# """Training phase"""
 for it in range(100000):
     # orig_mb = data[np.random.choice(np.arange(nsamples), mb_size, replace=False)]
     orig_mb = sess.run(batch_op)
@@ -404,17 +404,17 @@ for it in range(100000):
     if it % 100 == 0:
 
         # save generator output samples
-        n_sample = 64
+        n_sample = mb_size
         # save_sample(orig_mb[:n_sample])
         Z_sample = sample_Z(n_sample, Z_dim)
         samples = sess.run(G_example, feed_dict={Z: Z_sample})
-        out_arr = samples.reshape(8, 8, 64, 64, 3).swapaxes(1, 2).reshape(
+        out_arr = samples[:64].reshape(8, 8, 64, 64, 3).swapaxes(1, 2).reshape(
             8*64, -1, 3)
 
         imsave(dirname + '%d.png' % it, out_arr)
 
         # summaries
-        summary = sess.run(summary_op, feed_dict={orig: orig_mb})
+        summary = sess.run(summary_op, feed_dict={orig: orig_mb, Z:Z_sample})
         summary_writer.add_summary(summary, it)
 
     if (it+1) % 10000 == 0:
@@ -426,10 +426,8 @@ for it in range(100000):
     niter = 100 if it < 25 == 0 or it % 500 == 0 else 3
 
     for _ in range(niter):
-        # X_mb = data[np.random.choice(
-        #     np.arange(nsamples), mb_size, replace=False)]
-        # Z_sample = sample_Z(mb_size, Z_dim)
-        # CLIPPING FOR wgan
+        orig_mb = sess.run(batch_op)
+        Z_sample = sample_Z(mb_size, Z_dim)
         _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict={
             orig: orig_mb, Z: Z_sample})
 
@@ -439,17 +437,17 @@ for it in range(100000):
     _, G_loss_curr = sess.run([G_solver, G_loss], feed_dict={
                               orig: orig_mb, Z: Z_sample})
 
-    _, tot_loss_curr = sess.run(
-        [tot_optimizer, tot_loss], feed_dict={orig: orig_mb})
+    # _, tot_loss_curr = sess.run(
+    #     [tot_optimizer, tot_loss], feed_dict={orig: orig_mb})
 
     if it % 50 == 0:
         d_acc = sess.run(D_acc, feed_dict={
             orig: orig_mb, Z: Z_sample})
-        print('Took %f s' % (time.time() - t))
         print("#####################")
+        print('Took %f s' % (time.time() - t))
         print('Iter: {}'.format(it))
         print('D loss: {:.4}'. format(D_loss_curr))
         print('G_loss: {:.4}'.format(G_loss_curr))
         print('D_acc: {:.4}'.format(d_acc))
-        print('tot_loss: {:.4}'.format(tot_loss_curr))
+        # print('tot_loss: {:.4}'.format(tot_loss_curr))
         t = time.time()
