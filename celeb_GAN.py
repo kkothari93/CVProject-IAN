@@ -48,16 +48,12 @@ def inference_subnet(x, reuse=False, is_training=True):
             inputs=h,
             num_outputs=Z_dim,
             activation_fn=None,
-            normalizer_fn=batch_norm,
-            normalizer_params=params,
             biases_initializer=None)
 
         log_sigma_2 = tcl.fully_connected(
             inputs=h,
             num_outputs=Z_dim,
             activation_fn=None,
-            normalizer_fn=batch_norm,
-            normalizer_params=params,
             biases_initializer=None)
 
         eps = tf.random_normal((mb_size, Z_dim))
@@ -424,7 +420,7 @@ if __name__ == '__main__':
             n_sample = mb_size
             # save_sample(orig_mb[:n_sample])
             Z_sample = sample_Z(n_sample, Z_dim)
-            samples = sess.run(G_example, feed_dict={Z: Z_sample, is_training: False})
+            samples = sess.run(G_example, feed_dict={Z: Z_sample, is_training: True})
             out_arr = samples[:64].reshape(8, 8, 64, 64, 3).swapaxes(1, 2).reshape(
                 8*64, -1, 3)
 
@@ -432,7 +428,7 @@ if __name__ == '__main__':
 
             # summaries
             summary = sess.run(summary_op, feed_dict={
-                               orig: orig_mb, Z: Z_sample, is_training: False})
+                               orig: orig_mb, Z: Z_sample, is_training: True})
             summary_writer.add_summary(summary, it)
 
         if (it+50) % 10000 == 0:
