@@ -31,27 +31,33 @@ def batcher(pattern, batch_size=mb_size):
     return batch_op
 
 
-def inference_subnet(x, reuse=False):
+def inference_subnet(x, reuse=False, is_training=True):
     """Take flattened features from discriminator and infer latent variable"""
     batch_norm = tcl.batch_norm
+    params={'is_training': is_training}
     h = x
     with tf.variable_scope('inference_subnet', reuse=reuse):
         h = tcl.fully_connected(
             inputs=h,
             num_outputs=5*Z_dim,
             activation_fn=tf.nn.relu,
-            normalizer_fn=batch_norm)
+            normalizer_fn=batch_norm,
+            normalizer_params=params)
 
         mean = tcl.fully_connected(
             inputs=h,
             num_outputs=Z_dim,
             activation_fn=None,
+            normalizer_fn=batch_norm,
+            normalizer_params=params,
             biases_initializer=None)
 
         log_sigma_2 = tcl.fully_connected(
             inputs=h,
             num_outputs=Z_dim,
             activation_fn=None,
+            normalizer_fn=batch_norm,
+            normalizer_params=params,
             biases_initializer=None)
 
         eps = tf.random_normal((mb_size, Z_dim))
@@ -59,7 +65,7 @@ def inference_subnet(x, reuse=False):
         return mean + eps*tf.sqrt(tf.exp(log_sigma_2)), mean, log_sigma_2
 
 
-def discriminator(x, reuse=False):
+def discriminator(x, reuse=False, is_training=True):
     """Discriminator Net model
       Network to classify fake and true samples.
       params:
@@ -70,6 +76,7 @@ def discriminator(x, reuse=False):
           [batch size, feature dim]
     """
     batch_norm = tcl.layer_norm
+    params={'is_training': is_training}
 
     h = tf.reshape(x, [-1, 64, 64, 3])
     with tf.variable_scope("discriminator", reuse=reuse) as scope:
@@ -124,7 +131,7 @@ def discriminator(x, reuse=False):
     return y, h5, conv_features
 
 
-def generator(z, reuse=False):
+def generator(z, reuse=False, is_training=True):
     """ Generator Net model 
     params:
         z: [batch_size, Z_dim] input
@@ -135,13 +142,15 @@ def generator(z, reuse=False):
 
     """
     batch_norm = tcl.batch_norm
+    params={'is_training': is_training}
     # inputs = tf.concat(axis=1, values=[z, y])
     with tf.variable_scope('generator', reuse=reuse):
         h = tcl.fully_connected(
             inputs=z,
             num_outputs=4*4*1024,
             activation_fn=tf.nn.relu,
-            normalizer_fn=batch_norm)
+            normalizer_fn=batch_norm,
+            normalizer_params=params)
 
         h = tf.reshape(h, (-1, 4, 4, 1024))
 
@@ -150,28 +159,32 @@ def generator(z, reuse=False):
                                  kernel_size=4,
                                  stride=2,
                                  activation_fn=tf.nn.relu,
-                                 normalizer_fn=batch_norm)
+                                 normalizer_fn=batch_norm,
+                                 normalizer_params=params)
 
         h = tcl.conv2d_transpose(h,
                                  num_outputs=256,
                                  kernel_size=4,
                                  stride=2,
                                  activation_fn=tf.nn.relu,
-                                 normalizer_fn=batch_norm)
+                                 normalizer_fn=batch_norm,
+                                 normalizer_params=params)
 
         h = tcl.conv2d_transpose(h,
                                  num_outputs=128,
                                  kernel_size=4,
                                  stride=2,
                                  activation_fn=tf.nn.relu,
-                                 normalizer_fn=batch_norm)
+                                 normalizer_fn=batch_norm,
+                                 normalizer_params=params)
 
         h = tcl.conv2d_transpose(h,
                                  num_outputs=64,
                                  kernel_size=4,
                                  stride=2,
                                  activation_fn=tf.nn.relu,
-                                 normalizer_fn=batch_norm)
+                                 normalizer_fn=batch_norm,
+                                 normalizer_params=params)
 
         h = tcl.conv2d(h,
                        num_outputs=3,
@@ -179,6 +192,7 @@ def generator(z, reuse=False):
                        stride=1,
                        activation_fn=tf.nn.sigmoid,
                        normalizer_fn=batch_norm,
+                       normalizer_params=params,
                        biases_initializer=None)
 
     return h
@@ -260,13 +274,14 @@ tf.reset_default_graph()
 X = tf.placeholder(tf.float32, shape=[None, 64, 64, 3])
 Z = tf.placeholder(tf.float32, shape=[None, Z_dim])
 orig = tf.placeholder(tf.float32, shape=[None, 64, 64, 3])
+is_training = tf.placeholder(tf.bool)
 
 # pass original though inference
-_, D_f_orig, D_conv_features_orig = discriminator(orig)
-latent, mean, log_sigma_2 = inference_subnet(D_f_orig)
+_, D_f_orig, D_conv_features_orig = discriminator(orig,is_training=is_training)
+latent, mean, log_sigma_2 = inference_subnet(D_f_orig,is_training=is_training)
 
-G_sample = generator(latent)
-G_example = generator(Z, reuse=True)
+G_sample = generator(latent, is_training=is_training)
+G_example = generator(Z, reuse=True, is_training=is_training)
 
 """Improved WGAN with GP"""
 # Interpolation space
@@ -279,9 +294,9 @@ G_example = generator(Z, reuse=True)
 # norm_grad = tf.norm(grad_D_logit_i, axis=1)
 # print(norm_grad.get_shape().as_list())
 
-D_logit_r, D_features_r, D_conv_features_r = discriminator(orig, reuse=True)
+D_logit_r, D_features_r, D_conv_features_r = discriminator(orig, reuse=True, is_training=is_training)
 D_logit_g, D_features_g, D_conv_features_g = discriminator(
-    G_sample, reuse=True)
+    G_sample, reuse=True, is_training=is_training)
 
 
 """Wasserstein gradient penalty loss"""
@@ -396,7 +411,7 @@ if __name__ == '__main__':
     t = time.time()
 
     # """Training phase"""
-    for it in range(5000):
+    for it in range(200000):
         # orig_mb = data[np.random.choice(np.arange(nsamples), mb_size, replace=False)]
         orig_mb = sess.run(batch_op)
 
@@ -409,7 +424,7 @@ if __name__ == '__main__':
             n_sample = mb_size
             # save_sample(orig_mb[:n_sample])
             Z_sample = sample_Z(n_sample, Z_dim)
-            samples = sess.run(G_example, feed_dict={Z: Z_sample})
+            samples = sess.run(G_example, feed_dict={Z: Z_sample, is_training: False})
             out_arr = samples[:64].reshape(8, 8, 64, 64, 3).swapaxes(1, 2).reshape(
                 8*64, -1, 3)
 
@@ -417,10 +432,10 @@ if __name__ == '__main__':
 
             # summaries
             summary = sess.run(summary_op, feed_dict={
-                               orig: orig_mb, Z: Z_sample})
+                               orig: orig_mb, Z: Z_sample, is_training: False})
             summary_writer.add_summary(summary, it)
 
-        if (it+1) % 100 == 0:
+        if (it+50) % 10000 == 0:
             saver.save(sess, log_dir+"model.ckpt", it)
 
         Z_sample = sample_Z(mb_size, Z_dim)
@@ -432,20 +447,20 @@ if __name__ == '__main__':
             orig_mb = sess.run(batch_op)
             Z_sample = sample_Z(mb_size, Z_dim)
             _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict={
-                orig: orig_mb, Z: Z_sample})
+                orig: orig_mb, Z: Z_sample, is_training: True})
 
         # _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict={
-        #                          orig: orig_mb, Z: Z_sample})
+        #                          orig: orig_mb, Z: Z_sample, is_training: True})
 
         _, G_loss_curr = sess.run([G_solver, G_loss], feed_dict={
-                                  orig: orig_mb, Z: Z_sample})
+                                  orig: orig_mb, Z: Z_sample, is_training: True})
 
         # _, tot_loss_curr = sess.run(
         #     [tot_optimizer, tot_loss], feed_dict={orig: orig_mb})
 
         if it % 50 == 0:
             d_acc = sess.run(D_acc, feed_dict={
-                orig: orig_mb, Z: Z_sample})
+                orig: orig_mb, Z: Z_sample, is_training: True})
             print("#####################")
             print('Took %f s' % (time.time() - t))
             print('Iter: {}'.format(it))

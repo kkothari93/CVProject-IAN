@@ -13,41 +13,62 @@ import numpy as np
 import scipy.misc
 import tensorflow as tf
 import celeb_GAN as cgan
+from scipy.misc import imsave
 
 
 # from API import IAN
 class fooler():
     def __init__(self, **kwargs):
-        self.sess = tf.InteractiveSession()
+        self.sess = tf.InteractiveSession(graph=cgan.orig.graph)
         self.log_dir = kwargs['log_dir']
-        self.X = np.zeros((64, 64, 3))
-        self.sess.run(tf.global_variables_initializer())
+        self.meta_graph = kwargs['meta_graph']
+        self.X = np.zeros((64, 64, 3), dtype='float32')
+
+        # self.sess.run(tf.global_variables_initializer())
+        # tf.reset_default_graph()
+        # self.saver = tf.train.import_meta_graph(self.log_dir + self.meta_graph)
         self.saver = tf.train.Saver()
+        self.sess.run(tf.global_variables_initializer())
         self.saver.restore(
             self.sess, tf.train.latest_checkpoint(self.log_dir))
-        print('something happend')
+
+        # summary_writer = tf.summary.FileWriter('./', self.sess.graph)
+        # summary_writer.flush()
+
+        # graph_def = tf.get_default_graph().as_graph_def()
+        # graph_txt = str(self.sess.graph.as_graph_def())
+        # with open('graph.txt', 'w') as f: f.write(graph_txt)
+        # print('something happend')
 
     def updateX(self, X):
         self.X = X
 
     def sample_at(self, z):
-        image = self.sess.run(cgan.G_example, feed_dict={Z: z})
-        return image
+        image = self.sess.run(cgan.G_example, feed_dict={cgan.Z: z,
+                                                         cgan.is_training: False})
+        # imsave('trial.png', image[0])
+        return image.swapaxes(1,3).swapaxes(2,3)
+        # return image
 
     def imgradRGB(self, c1, r1, c2, r2, RGB, z):
         x_hat = cgan.G_sample
+        print(RGB.shape)
         RGB_t = tf.convert_to_tensor(RGB)
         z_t = tf.convert_to_tensor(z)
         expr = tf.reduce_mean(
             tf.square(x_hat[0, r1:r2, c1:c2, :] - RGB_t[0, r1:r2, c1:c2, :]))
         grad = tf.gradients([expr], [z_t])
-        grad_out = sess.run(
-            grad, feed_dict={cgan.orig: self.X.reshape(1, 64, 64, 3)})
+        grad_out = self.sess.run(
+            grad, feed_dict={cgan.orig: self.X.reshape(1, 64, 64, 3),
+                             cgan.is_training: False})
         return grad_out
 
     def encode_images(self, x):
-        self.X = x
-        return self.sess(cgan.latent, feed_dict={cgan.orig: x})
+        # print(x.shape)
+        self.X = x.swapaxes(1, 3).swapaxes(1, 2)
+        # print(self.X.shape)
+        return self.sess.run(cgan.latent, feed_dict={cgan.orig: self.X,
+                                                     cgan.is_training: False})
 
     def get_zdim(self):
         return cgan.Z_dim
@@ -57,10 +78,24 @@ class fooler():
 
 # Initialize model
 # model = IAN(config_path = 'IAN_simple.py', dnn = True)
-model = fooler(log_dir='moonshot_disc_freq/LOGS/')
+model = fooler(log_dir='results/interface_trial/LOGS/',
+               meta_graph='swdgan_disc_freq.meta')
 
-# Prepare GUI functions
-print('Compiling remaining functions')
+# z_trial = np.eye(100)[45].reshape(-1, 100)
+# out = model.sample_at(z_trial)
+# imsave('trial.png', out[0])
+# imsave('trial.png',out.reshape(5,5,64,64,3).swapaxes(1,2).reshape(5*64,-1,3))
+
+
+# z_trial = np.random.uniform(-1.,1., size=(25,100))
+# out = model.sample_at(z_trial)
+# print(out.shape)
+# imsave('trial2.png',out.reshape(5,5,64,64,3).swapaxes(1,2).reshape(5*64,-1,3))
+
+# import sys
+# sys.exit()
+# # Prepare GUI functions
+# print('Compiling remaining functions')
 
 # Create master
 master = Tk()
@@ -91,8 +126,7 @@ def from_tanh(input):
 
 
 # Ground truth image
-GIM = np.random.rand(3, 64, 64)
-# np.asarray(np.load('CelebAValid.npz')['arr_0'][420])
+GIM = np.asarray(np.load('CelebAValid.npz')['arr_0'][420])
 
 # Image for modification
 IM = GIM
@@ -110,7 +144,7 @@ DELTA = np.zeros(np.shape(IM), dtype=np.float32)
 USER_MASK = np.mean(DELTA, axis=0)
 
 # Are we operating on a photo or a sample?
-SAMPLE_FLAG = 0
+SAMPLE_FLAG = 1
 
 
 # Latent Canvas Variables
@@ -118,7 +152,7 @@ SAMPLE_FLAG = 0
 dim = [10, 10]
 
 # Squared Latent Array
-Z = np.zeros((dim[0], dim[1]), dtype=np.float32)
+Z = np.random.uniform(-1.0, 1.0, size=(dim[0], dim[1]))
 
 # Pixel-wise resolution for latent canvas
 res = 16
@@ -159,6 +193,7 @@ mycol = (0, 0, 0)
 
 def update_photo(data=None, widget=None):
     global Z
+    # print(Z[:5,0])
     if data is None:  # By default, assume we're updating with the current value of Z
         data = np.repeat(np.repeat(np.uint8(
             from_tanh(model.sample_at(np.float32([Z.flatten()]))[0])), 4, 1), 4, 2)
@@ -169,6 +204,8 @@ def update_photo(data=None, widget=None):
         widget = output
     # Reshape image to canvas
     mshape = (4*64, 4*64, 1)
+    # print(data.shape)
+    # print(data[:2, :2, :2])
     im = Image.fromarray(np.concatenate([np.reshape(data[0], mshape), np.reshape(
         data[1], mshape), np.reshape(data[2], mshape)], axis=2), mode='RGB')
 
@@ -368,7 +405,8 @@ def paint_latents(event):
     # Paint in latent space and update Z
     painted_rects.append(event.widget.create_rectangle(
         x1, y1, x2, y2, fill=rb(color.get()), outline=rb(color.get())))
-    r[max((y1-bd), 0):min((y2-bd), r.shape[0]), max((x1-bd), 0)      :min((x2-bd), r.shape[1])] = color.get()/255.0
+    r[max((y1-bd), 0):min((y2-bd), r.shape[0]), max((x1-bd), 0)
+          :min((x2-bd), r.shape[1])] = color.get()/255.0
     Z = np.asarray([np.mean(o) for v in [np.hsplit(h, Z.shape[0])
                                          for h in np.vsplit((r), Z.shape[1])]
                     for o in v]).reshape(Z.shape[0], Z.shape[1])
@@ -409,7 +447,7 @@ def scroll(event):
 
 def sample():
     global Z, output, RECON, IM, ERROR, SAMPLE_FLAG
-    Z = np.random.randn(Z.shape[0], Z.shape[1])
+    Z = np.random.uniform(-1.0, 1.0, size=(Z.shape[0], Z.shape[1]))
     # Z = np.random.uniform(low=-1.0,high=1.0,size=(Z.shape[0],Z.shape[1])) # Optionally get uniform sample
 
     # Update reconstruction and error
