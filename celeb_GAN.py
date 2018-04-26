@@ -10,11 +10,10 @@ import tensorflow.contrib.layers as tcl
 
 mb_size = 128
 Z_dim = 100
-name = 'moonshot_wgangp_trial/'  # include forward slash here
+name = 'interface_trial/'  # include forward slash here
 dirname = 'results/'+name
 log_dir = 'results/'+name+'LOGS/'
 ndirs = 10000  # used only for swgan
-
 
 # hyperparams for loss training
 w_adv = 1
@@ -268,27 +267,26 @@ latent, mean, log_sigma_2 = inference_subnet(D_f_orig)
 
 G_sample = generator(latent)
 G_example = generator(Z, reuse=True)
-print(G_example.get_shape().as_list())
 
 """Improved WGAN with GP"""
 # Interpolation space
-eps = tf.random_uniform((mb_size, 1, 1, 1))
-interp = eps*orig + (1.0-eps)*G_example
+# eps = tf.random_uniform((mb_size, 1, 1, 1))
+# interp = eps*orig + (1.0-eps)*G_example
 
-D_logit_i, D_features_i, _ = discriminator(interp, reuse=True)
-grad_D_logit_i = tf.gradients([D_logit_i], [interp], name='wgan-grad')[0]
-grad_D_logit_i = tcl.flatten(grad_D_logit_i)
-norm_grad = tf.norm(grad_D_logit_i, axis=1)
-print(norm_grad.get_shape().as_list())
+# D_logit_i, D_features_i, _ = discriminator(interp, reuse=True)
+# grad_D_logit_i = tf.gradients([D_logit_i], [interp], name='wgan-grad')[0]
+# grad_D_logit_i = tcl.flatten(grad_D_logit_i)
+# norm_grad = tf.norm(grad_D_logit_i, axis=1)
+# print(norm_grad.get_shape().as_list())
 
 D_logit_r, D_features_r, D_conv_features_r = discriminator(orig, reuse=True)
 D_logit_g, D_features_g, D_conv_features_g = discriminator(
-    G_example, reuse=True)
+    G_sample, reuse=True)
 
 
 """Wasserstein gradient penalty loss"""
-loss_gp = tf.reduce_mean(tf.square(norm_grad - 1.0))
-tf.summary.scalar('loss_gp', loss_gp)
+# loss_gp = tf.reduce_mean(tf.square(norm_grad - 1.0))
+# tf.summary.scalar('loss_gp', loss_gp)
 
 """IAN losses eqn 3"""
 
@@ -310,11 +308,11 @@ tf.summary.scalar('loss_kl', loss_kl)
 
 
 """Standard GAN loss"""
-# D_loss_real = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
-#     logits=D_logit_r, labels=tf.ones_like(D_logit_r)))
-# D_loss_fake = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
-#     logits=D_logit_g, labels=tf.zeros_like(D_logit_g)))
-# D_loss = D_loss_real + D_loss_fake
+D_loss_real = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
+    logits=D_logit_r, labels=tf.ones_like(D_logit_r)))
+D_loss_fake = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
+    logits=D_logit_g, labels=tf.zeros_like(D_logit_g)))
+D_loss = D_loss_real + D_loss_fake
 
 
 # G_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
@@ -322,13 +320,13 @@ tf.summary.scalar('loss_kl', loss_kl)
 
 
 """WGAN loss"""
-D_loss_real = tf.scalar_mul(-1.0, tf.reduce_mean(D_logit_r))
-D_loss_fake = tf.reduce_mean(D_logit_g)
-D_loss = D_loss_real + D_loss_fake + w_gp*loss_gp
-G_loss = -D_loss_fake
+# D_loss_real = tf.scalar_mul(-1.0, tf.reduce_mean(D_logit_r))
+# D_loss_fake = tf.reduce_mean(D_logit_g)
+# D_loss = D_loss_real + D_loss_fake + w_gp*loss_gp
+# G_loss = -D_loss_fake
 
 """SWDGAN loss"""
-# G_loss = estimate_swd(D_features_g, D_features_r)
+G_loss = estimate_swd(D_features_g, D_features_r)
 
 """Total loss"""
 tot_loss = w_adv*D_loss + w_img*loss_img + w_feat*loss_feature + w_kl*loss_kl
@@ -370,84 +368,89 @@ if not os.path.exists(log_dir):
     os.makedirs(log_dir)
 
 
-saver = tf.train.Saver()
-
-pattern_data = './data/celebA_tfrecords/celeba*'
-batch_op = batcher(pattern_data, batch_size=mb_size)
-# data = np.load('../swdgan/small_celeb_batch.npy')
-# nsamples = len(data)
-
-config = tf.ConfigProto()
-config.gpu_options.allow_growth = True
-sess = tf.Session(config=config)
-
 summary_op = tf.summary.merge_all()
 
-sess.run(tf.global_variables_initializer())
-sess.run(tf.local_variables_initializer())
-coord = tf.train.Coordinator()
-threads = tf.train.start_queue_runners(coord=coord, sess=sess)
 
-summary_writer = tf.summary.FileWriter(log_dir, sess.graph)
+if __name__ == '__main__':
+    pattern_data = './data/celebA_tfrecords/celeba*'
+    batch_op = batcher(pattern_data, batch_size=mb_size)
+    # data = np.load('../swdgan/small_celeb_batch.npy')
+    # nsamples = len(data)
 
-print("Initialized variables...")
-t = time.time()
+    saver = tf.train.Saver()
+    config = tf.ConfigProto()
+    config.gpu_options.allow_growth = True
+    sess = tf.Session(config=config)
 
-# """Training phase"""
-for it in range(100000):
-    # orig_mb = data[np.random.choice(np.arange(nsamples), mb_size, replace=False)]
-    orig_mb = sess.run(batch_op)
+    meta_graph_def = tf.train.export_meta_graph(
+        filename=log_dir+'swdgan_disc_freq.meta')
 
-    if coord.should_stop():
-        break
+    sess.run(tf.global_variables_initializer())
+    sess.run(tf.local_variables_initializer())
+    coord = tf.train.Coordinator()
+    threads = tf.train.start_queue_runners(coord=coord, sess=sess)
 
-    if it % 100 == 0:
+    summary_writer = tf.summary.FileWriter(log_dir, sess.graph)
 
-        # save generator output samples
-        n_sample = mb_size
-        # save_sample(orig_mb[:n_sample])
-        Z_sample = sample_Z(n_sample, Z_dim)
-        samples = sess.run(G_example, feed_dict={Z: Z_sample})
-        out_arr = samples[:64].reshape(8, 8, 64, 64, 3).swapaxes(1, 2).reshape(
-            8*64, -1, 3)
+    print("Initialized variables...")
+    t = time.time()
 
-        imsave(dirname + '%d.png' % it, out_arr)
-
-        # summaries
-        summary = sess.run(summary_op, feed_dict={orig: orig_mb, Z:Z_sample})
-        summary_writer.add_summary(summary, it)
-
-    if (it+1) % 10000 == 0:
-        saver.save(sess, log_dir+"model.ckpt", it)
-
-    Z_sample = sample_Z(mb_size, Z_dim)
-
-    # run discriminator to optimality in case of WGAN
-    niter = 100 if it < 25 == 0 or it % 500 == 0 else 3
-
-    for _ in range(niter):
+    # """Training phase"""
+    for it in range(5000):
+        # orig_mb = data[np.random.choice(np.arange(nsamples), mb_size, replace=False)]
         orig_mb = sess.run(batch_op)
+
+        if coord.should_stop():
+            break
+
+        if it % 100 == 0:
+
+            # save generator output samples
+            n_sample = mb_size
+            # save_sample(orig_mb[:n_sample])
+            Z_sample = sample_Z(n_sample, Z_dim)
+            samples = sess.run(G_example, feed_dict={Z: Z_sample})
+            out_arr = samples[:64].reshape(8, 8, 64, 64, 3).swapaxes(1, 2).reshape(
+                8*64, -1, 3)
+
+            imsave(dirname + '%d.png' % it, out_arr)
+
+            # summaries
+            summary = sess.run(summary_op, feed_dict={
+                               orig: orig_mb, Z: Z_sample})
+            summary_writer.add_summary(summary, it)
+
+        if (it+1) % 100 == 0:
+            saver.save(sess, log_dir+"model.ckpt", it)
+
         Z_sample = sample_Z(mb_size, Z_dim)
-        _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict={
-            orig: orig_mb, Z: Z_sample})
 
-    # _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict={
-    #                          orig: orig_mb, Z: Z_sample})
+        # run discriminator to optimality in case of WGAN
+        niter = 100 if it < 25 == 0 or it % 500 == 0 else 3
 
-    _, G_loss_curr = sess.run([G_solver, G_loss], feed_dict={
-                              orig: orig_mb, Z: Z_sample})
+        for _ in range(niter):
+            orig_mb = sess.run(batch_op)
+            Z_sample = sample_Z(mb_size, Z_dim)
+            _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict={
+                orig: orig_mb, Z: Z_sample})
 
-    # _, tot_loss_curr = sess.run(
-    #     [tot_optimizer, tot_loss], feed_dict={orig: orig_mb})
+        # _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict={
+        #                          orig: orig_mb, Z: Z_sample})
 
-    if it % 50 == 0:
-        d_acc = sess.run(D_acc, feed_dict={
-            orig: orig_mb, Z: Z_sample})
-        print("#####################")
-        print('Took %f s' % (time.time() - t))
-        print('Iter: {}'.format(it))
-        print('D loss: {:.4}'. format(D_loss_curr))
-        print('G_loss: {:.4}'.format(G_loss_curr))
-        print('D_acc: {:.4}'.format(d_acc))
-        # print('tot_loss: {:.4}'.format(tot_loss_curr))
-        t = time.time()
+        _, G_loss_curr = sess.run([G_solver, G_loss], feed_dict={
+                                  orig: orig_mb, Z: Z_sample})
+
+        # _, tot_loss_curr = sess.run(
+        #     [tot_optimizer, tot_loss], feed_dict={orig: orig_mb})
+
+        if it % 50 == 0:
+            d_acc = sess.run(D_acc, feed_dict={
+                orig: orig_mb, Z: Z_sample})
+            print("#####################")
+            print('Took %f s' % (time.time() - t))
+            print('Iter: {}'.format(it))
+            print('D loss: {:.4}'. format(D_loss_curr))
+            print('G_loss: {:.4}'.format(G_loss_curr))
+            print('D_acc: {:.4}'.format(d_acc))
+            # print('tot_loss: {:.4}'.format(tot_loss_curr))
+            t = time.time()
