@@ -31,7 +31,7 @@ def batcher(pattern, batch_size=mb_size):
     return batch_op
 
 
-def inference_subnet(x, reuse=False, is_training=True):
+def inference_subnet(x, reuse=False, is_training=True, batch_size = 128):
     """Take flattened features from discriminator and infer latent variable"""
     batch_norm = tcl.batch_norm
     params={'is_training': is_training}
@@ -56,7 +56,7 @@ def inference_subnet(x, reuse=False, is_training=True):
             activation_fn=None,
             biases_initializer=None)
 
-        eps = tf.random_normal((mb_size, Z_dim))
+        eps = tf.random_normal((batch_size, Z_dim))
 
         return mean + eps*tf.sqrt(tf.exp(log_sigma_2)), mean, log_sigma_2
 
@@ -270,11 +270,12 @@ tf.reset_default_graph()
 X = tf.placeholder(tf.float32, shape=[None, 64, 64, 3])
 Z = tf.placeholder(tf.float32, shape=[None, Z_dim])
 orig = tf.placeholder(tf.float32, shape=[None, 64, 64, 3])
+eps_bs = tf.placeholder(tf.int32)
 is_training = tf.placeholder(tf.bool)
 
 # pass original though inference
 _, D_f_orig, D_conv_features_orig = discriminator(orig,is_training=is_training)
-latent, mean, log_sigma_2 = inference_subnet(D_f_orig,is_training=is_training)
+latent, mean, log_sigma_2 = inference_subnet(D_f_orig,is_training=is_training, batch_size=eps_bs)
 
 G_sample = generator(latent, is_training=is_training)
 G_example = generator(Z, reuse=True, is_training=is_training)
@@ -395,6 +396,8 @@ if __name__ == '__main__':
 
     meta_graph_def = tf.train.export_meta_graph(
         filename=log_dir+'swdgan_disc_freq.meta')
+    import sys
+    sys.exit()
 
     sess.run(tf.global_variables_initializer())
     sess.run(tf.local_variables_initializer())
@@ -406,7 +409,7 @@ if __name__ == '__main__':
     print("Initialized variables...")
     t = time.time()
 
-    # """Training phase"""
+    """Training phase"""
     for it in range(200000):
         # orig_mb = data[np.random.choice(np.arange(nsamples), mb_size, replace=False)]
         orig_mb = sess.run(batch_op)
@@ -428,7 +431,7 @@ if __name__ == '__main__':
 
             # summaries
             summary = sess.run(summary_op, feed_dict={
-                               orig: orig_mb, Z: Z_sample, is_training: True})
+                               orig: orig_mb, Z: Z_sample, is_training: True, eps_bs:mb_size})
             summary_writer.add_summary(summary, it)
 
         if (it+50) % 10000 == 0:
@@ -443,20 +446,20 @@ if __name__ == '__main__':
             orig_mb = sess.run(batch_op)
             Z_sample = sample_Z(mb_size, Z_dim)
             _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict={
-                orig: orig_mb, Z: Z_sample, is_training: True})
+                orig: orig_mb, Z: Z_sample, is_training: True, eps_bs:mb_size})
 
         # _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict={
         #                          orig: orig_mb, Z: Z_sample, is_training: True})
 
         _, G_loss_curr = sess.run([G_solver, G_loss], feed_dict={
-                                  orig: orig_mb, Z: Z_sample, is_training: True})
+                                  orig: orig_mb, Z: Z_sample, is_training: True, eps_bs:mb_size})
 
-        # _, tot_loss_curr = sess.run(
-        #     [tot_optimizer, tot_loss], feed_dict={orig: orig_mb})
+        _, tot_loss_curr = sess.run(
+            [tot_optimizer, tot_loss], feed_dict={orig: orig_mb})
 
         if it % 50 == 0:
             d_acc = sess.run(D_acc, feed_dict={
-                orig: orig_mb, Z: Z_sample, is_training: True})
+                orig: orig_mb, Z: Z_sample, is_training: True, eps_bs:mb_size})
             print("#####################")
             print('Took %f s' % (time.time() - t))
             print('Iter: {}'.format(it))

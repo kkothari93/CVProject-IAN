@@ -12,9 +12,10 @@ from PIL import Image, ImageTk
 import numpy as np
 import scipy.misc
 import tensorflow as tf
-import celeb_GAN as cgan
+import celeb_GAN_rough as cgan
 from scipy.misc import imsave
 
+my_one = 1
 
 # from API import IAN
 class fooler():
@@ -44,23 +45,33 @@ class fooler():
         self.X = X
 
     def sample_at(self, z):
-        image = self.sess.run(cgan.G_example, feed_dict={cgan.Z: z,
-                                                         cgan.is_training: False})
+        image = self.sess.run(cgan.G_example,
+                              feed_dict={cgan.Z: z,
+                                         cgan.is_training: False,
+                                         cgan.eps_bs: my_one})
         # imsave('trial.png', image[0])
         return image.swapaxes(1,3).swapaxes(2,3)
         # return image
 
     def imgradRGB(self, c1, r1, c2, r2, RGB, z):
         x_hat = cgan.G_sample
-        print(RGB.shape)
+        # z_t = cgan.latent
+        RGB = RGB.swapaxes(1,3).swapaxes(1,2)
+        # print(RGB.shape)
         RGB_t = tf.convert_to_tensor(RGB)
-        z_t = tf.convert_to_tensor(z)
+        # z_t = tf.convert_to_tensor(z)
         expr = tf.reduce_mean(
             tf.square(x_hat[0, r1:r2, c1:c2, :] - RGB_t[0, r1:r2, c1:c2, :]))
-        grad = tf.gradients([expr], [z_t])
+
+        # grad = tf.gradients([expr], [z_t])
+        grad = tf.gradients([expr], [cgan.latent])
+
         grad_out = self.sess.run(
-            grad, feed_dict={cgan.orig: self.X.reshape(1, 64, 64, 3),
+            grad, feed_dict={cgan.orig: self.X,
+                             cgan.latent: z,
+                             cgan.eps_bs: my_one,
                              cgan.is_training: False})
+        
         return grad_out
 
     def encode_images(self, x):
@@ -68,6 +79,7 @@ class fooler():
         self.X = x.swapaxes(1, 3).swapaxes(1, 2)
         # print(self.X.shape)
         return self.sess.run(cgan.latent, feed_dict={cgan.orig: self.X,
+                                                     cgan.eps_bs: my_one, 
                                                      cgan.is_training: False})
 
     def get_zdim(self):
@@ -105,7 +117,7 @@ master.title("Neural Photo Editor")
 
 
 def rgb(r, g, b):
-    return '#%02x%02x%02x' % (r, g, b)
+    return '#%02x%02x%02x' % (int(r), int(g), int(b))
 
 # Convert RGB to bi-directional RB scale.
 
@@ -310,10 +322,13 @@ def paint(event):
     weight = 0.05
 
     # Get paintbrush location
-    [x1, y1, x2, y2] = [coordinate //
+    [x1, y1, x2, y2] = [int(coordinate) //
                         4 for coordinate in output.coords(pixel_rect)]
 
     # Get dIM/dZ that minimizes the difference between IM and RGB in the domain of the paintbrush
+    # print(myRGB.shape)
+    # myRGB_temp = myRGB.swapaxes(1, 3).swapaxes(1, 2)
+    # print(myRGB_temp.shape)
     temp = np.asarray(model.imgradRGB(x1, y1, x2, y2, np.float32(
         to_tanh(myRGB)), np.float32([Z.flatten()]))[0])
     grad = temp.reshape((10, 10))*(1+(x2-x1))
@@ -465,6 +480,7 @@ def Reset():
     IM = GIM
     Z = np.reshape(model.encode_images(np.asarray(
         [to_tanh(IM)], dtype=np.float32))[0], np.shape(Z))
+
     DELTA = np.zeros(np.shape(IM), dtype=np.float32)
     RECON = np.uint8(from_tanh(model.sample_at(np.float32([Z.flatten()]))[0]))
     ERROR = to_tanh(np.float32(IM)) - to_tanh(np.float32(RECON))
@@ -493,11 +509,11 @@ def update_brush(event):
 
 def getColor():
     global myRGB, mycol
-    col = askcolor(mycol)
+    col = askcolor((int(mycol[0]), int(mycol[1]), int(mycol[2])))
     if col[0] is None:
         return  # Dont change color if Cancel pressed.
     mycol = col[0]
-    for i in xrange(3):
+    for i in range(0, 3):
         myRGB[0, i, :, :] = mycol[i]  # assign
 
 # Optional function to "lock" latents so that gradients are always evaluated with respect to the locked Z
@@ -565,7 +581,6 @@ myentry.pack(side=LEFT)
 f.pack(side=TOP)
 
 
-print('Running')
 # Reset and infer to kick it off
 Reset()
 infer()
