@@ -188,6 +188,17 @@ class CGAN():
         batch_op = batcher(self.records_loc, self.batch_size)
         return batch_op
 
+    def load(self, dirname):
+        saver = tf.train.Saver()
+
+        config = tf.ConfigProto()
+        config.gpu_options.allow_growth = True
+        with tf.Session(config=config) as sess:
+            sess.run(tf.global_variables_initializer())
+            saver.restore(sess, tf.train.latest_checkpoint(dirname))
+        print('Model loaded!')
+
+
     def train(self, iters):
 
         batch_op = self.get_batcher()
@@ -298,7 +309,7 @@ class CGAN():
         sess = tf.Session(config=config)
 
         sess.run(tf.global_variables_initializer())
-        saver.restore(sess, tf.latest_checkpoint(self.log_dir))
+        saver.restore(sess, tf.train.latest_checkpoint(self.log_dir))
 
         z_samp = np.random.normal(
             size=(n, self.lat_size))

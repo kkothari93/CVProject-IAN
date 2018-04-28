@@ -12,17 +12,17 @@ from PIL import Image, ImageTk
 import numpy as np
 import scipy.misc
 import tensorflow as tf
-import celeb_GAN_rough as cgan
+import cgan as cgan
 from scipy.misc import imsave
 
-my_one = 1
 
 # from API import IAN
+
 class fooler():
     def __init__(self, **kwargs):
-        self.sess = tf.InteractiveSession(graph=cgan.orig.graph)
+        self.model = kwargs['model']
         self.log_dir = kwargs['log_dir']
-        self.meta_graph = kwargs['meta_graph']
+        self.sess = tf.InteractiveSession(graph=self.model.orig.graph)
         self.X = np.zeros((64, 64, 3), dtype='float32')
 
         # self.sess.run(tf.global_variables_initializer())
@@ -36,27 +36,22 @@ class fooler():
         # summary_writer = tf.summary.FileWriter('./', self.sess.graph)
         # summary_writer.flush()
 
-        # graph_def = tf.get_default_graph().as_graph_def()
-        # graph_txt = str(self.sess.graph.as_graph_def())
-        # with open('graph.txt', 'w') as f: f.write(graph_txt)
-        # print('something happend')
-
     def updateX(self, X):
         self.X = X
 
     def sample_at(self, z):
-        image = self.sess.run(cgan.G_example,
-                              feed_dict={cgan.Z: z,
-                                         cgan.is_training: False,
-                                         cgan.eps_bs: my_one})
+        image = self.sess.run(self.model.G_samp,
+                              feed_dict={self.model.Z: z,
+                                         self.model.TRAIN: False,
+                                         self.model.EPS_BS: 1})
         # imsave('trial.png', image[0])
-        return image.swapaxes(1,3).swapaxes(2,3)
+        return image.swapaxes(1, 3).swapaxes(2, 3)
         # return image
 
     def imgradRGB(self, c1, r1, c2, r2, RGB, z):
-        x_hat = cgan.G_sample
-        # z_t = cgan.latent
-        RGB = RGB.swapaxes(1,3).swapaxes(1,2)
+        x_hat = self.model.G_orig
+        # z_t = self.model.latent
+        RGB = RGB.swapaxes(1, 3).swapaxes(1, 2)
         # print(RGB.shape)
         RGB_t = tf.convert_to_tensor(RGB)
         # z_t = tf.convert_to_tensor(z)
@@ -64,34 +59,35 @@ class fooler():
             tf.square(x_hat[0, r1:r2, c1:c2, :] - RGB_t[0, r1:r2, c1:c2, :]))
 
         # grad = tf.gradients([expr], [z_t])
-        grad = tf.gradients([expr], [cgan.latent])
+        grad = tf.gradients([expr], [self.model.latent])
 
         grad_out = self.sess.run(
-            grad, feed_dict={cgan.orig: self.X,
-                             cgan.latent: z,
-                             cgan.eps_bs: my_one,
-                             cgan.is_training: False})
-        
+            grad, feed_dict={self.model.orig: self.X,
+                             self.model.Z: z,
+                             self.model.EPS_BS: 1,
+                             self.model.TRAIN: False})
+
         return grad_out
 
     def encode_images(self, x):
         # print(x.shape)
         self.X = x.swapaxes(1, 3).swapaxes(1, 2)
         # print(self.X.shape)
-        return self.sess.run(cgan.latent, feed_dict={cgan.orig: self.X,
-                                                     cgan.eps_bs: my_one, 
-                                                     cgan.is_training: False})
+        return self.sess.run(self.model.latent, feed_dict={self.model.orig: self.X,
+                                                           self.model.EPS_BS: 1,
+                                                           self.model.TRAIN: False})
 
     def get_zdim(self):
-        return cgan.Z_dim
+        return self.model.lat_size
 
 # Step 1: Create theano functions
 
 
 # Initialize model
 # model = IAN(config_path = 'IAN_simple.py', dnn = True)
-model = fooler(log_dir='results/interface_trial/LOGS/',
-               meta_graph='swdgan_disc_freq.meta')
+net = cgan.CGAN()
+model = fooler(model=net, log_dir='results/trial/LOGS')
+
 
 # z_trial = np.eye(100)[45].reshape(-1, 100)
 # out = model.sample_at(z_trial)
@@ -317,6 +313,7 @@ def paint(event):
 
     # Move the paintbrush
     move_mouse(event)
+    print('Painting')
 
     # Define a gradient descent step-size
     weight = 0.05
@@ -338,10 +335,12 @@ def paint(event):
 
     # If operating on a sample, update sample
     if SAMPLE_FLAG:
+        print('Updating with sample')
         update_canvas(w)
         update_photo(None, output)
     # Else, update photo
     else:
+        print('Updating with photo')
         # Difference between current image and reconstruction
         DELTA = model.sample_at(np.float32([Z.flatten()]))[
             0]-to_tanh(np.float32(RECON))
@@ -415,13 +414,13 @@ def paint_latents(event):
     x1, y1 = (event.x - d.get()), (event.y - d.get())
     x2, y2 = (event.x + d.get()), (event.y + d.get())
 
+    print('Painting Latents')
     selected_widget = event.widget
 
     # Paint in latent space and update Z
     painted_rects.append(event.widget.create_rectangle(
         x1, y1, x2, y2, fill=rb(color.get()), outline=rb(color.get())))
-    r[max((y1-bd), 0):min((y2-bd), r.shape[0]), max((x1-bd), 0)
-          :min((x2-bd), r.shape[1])] = color.get()/255.0
+    r[max((y1-bd), 0):min((y2-bd), r.shape[0]), max((x1-bd), 0):min((x2-bd), r.shape[1])] = color.get()/255.0
     Z = np.asarray([np.mean(o) for v in [np.hsplit(h, Z.shape[0])
                                          for h in np.vsplit((r), Z.shape[1])]
                     for o in v]).reshape(Z.shape[0], Z.shape[1])
