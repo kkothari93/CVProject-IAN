@@ -14,6 +14,7 @@ import scipy.misc
 import tensorflow as tf
 import cgan as cgan
 from scipy.misc import imsave
+from matplotlib import pyplot as plt
 
 
 # from API import IAN
@@ -44,7 +45,9 @@ class fooler():
                               feed_dict={self.model.Z: z,
                                          self.model.TRAIN: False,
                                          self.model.EPS_BS: 1})
+        print(image.shape)
         # imsave('trial.png', image[0])
+
         return image.swapaxes(1, 3).swapaxes(2, 3)
         # return image
 
@@ -126,11 +129,15 @@ def rb(i):
 
 
 def to_tanh(input):
+    # print('max tanh')
+    # print(np.max(input))
     return 2.0*(input/255.0)-1.0
+    # return 1.0*(input/255.0)
 
 
 def from_tanh(input):
-    return 255.0*(input+1)/2.0
+    return 255.0*(input + 1.0)/2.0
+    #return 255.0*(input)/1.0
 
 
 # Ground truth image
@@ -152,7 +159,7 @@ DELTA = np.zeros(np.shape(IM), dtype=np.float32)
 USER_MASK = np.mean(DELTA, axis=0)
 
 # Are we operating on a photo or a sample?
-SAMPLE_FLAG = 1
+SAMPLE_FLAG = 0
 
 
 # Latent Canvas Variables
@@ -205,6 +212,8 @@ def update_photo(data=None, widget=None):
     if data is None:  # By default, assume we're updating with the current value of Z
         data = np.repeat(np.repeat(np.uint8(
             from_tanh(model.sample_at(np.float32([Z.flatten()]))[0])), 4, 1), 4, 2)
+        # data = np.repeat(np.repeat(np.uint8(
+            # from_tanh(model.sample_at(np.float32([Z.flatten()]))[0])), 4, 1), 4, 2)
     else:
         data = np.repeat(np.repeat(np.uint8(data), 4, 1), 4, 2)
 
@@ -218,6 +227,10 @@ def update_photo(data=None, widget=None):
         data[1], mshape), np.reshape(data[2], mshape)], axis=2), mode='RGB')
 
     # Make sure photo is an object of the current widget so the garbage collector doesn't wreck it
+
+    # plt.figure()
+    # plt.imshow(im)
+    # plt.savefig('temp.py')
     widget.photo = ImageTk.PhotoImage(image=im)
     widget.create_image(0, 0, image=widget.photo, anchor=NW)
     widget.tag_raise(pixel_rect)
@@ -300,7 +313,8 @@ def upperlim(image):
 
 def dampen(input, correct):
     # The closer input+correct is to -1 or 1, the further it is from 0.
-    # We're okay with almost all values (i.e. between 0 and 0.8) but as we approach 1 we want to slow the change
+    # We're okay with almost all values (i.e. between 0 and 0.8) but as 
+    # we approach 1 we want to slow the change
     thresh = 0.75
     m = (input+correct) > thresh
     return -input*m+correct*(1-m)+thresh*m
@@ -356,9 +370,31 @@ def paint(event):
         # D = dampen(to_tanh(np.float32(RECON)),MASK*DELTA+(1-MASK)*ERROR)
 
         # Update image
+        print('MASK')
+        print(np.shape(MASK))
+        print(np.max(MASK))
+        print('ERROR')
+        # ERROR = ERROR[[2, 0, 1], :, :]
+        print(np.shape(ERROR))
+        print(np.max(ERROR))
+        print('DELTA')
+        print(np.shape(DELTA))
+        print(np.max(DELTA))
+        # DELTA[:] = 0
         D = MASK*DELTA+(1-MASK)*ERROR
-        IM = np.uint8(from_tanh(to_tanh(RECON)+D))
+        # D = (1-MASK)*ERROR
 
+        # D = D[[2,1,0],:,:]
+        # D = D.swapaxes(0, 1).swapaxes(1, 2)
+        print('D')
+        print(D.shape)
+        print(np.max(D))
+        # IM = np.uint8(from_tanh(to_tanh(RECON)+D))
+        IM = np.uint8(from_tanh(D))
+
+        print('IMAGE')
+        print(np.shape(IM))
+        print(np.max(IM))
         # Pass updates
         update_canvas(w)
         update_photo(IM, output)
@@ -465,6 +501,7 @@ def sample():
     # Z = np.random.uniform(low=-1.0,high=1.0,size=(Z.shape[0],Z.shape[1])) # Optionally get uniform sample
 
     # Update reconstruction and error
+    # RECON = (model.sample_at(np.float32([Z.flatten()]))[0])
     RECON = np.uint8(from_tanh(model.sample_at(np.float32([Z.flatten()]))[0]))
     ERROR = to_tanh(np.float32(IM)) - to_tanh(np.float32(RECON))
     update_canvas(w)
