@@ -15,6 +15,7 @@ import tensorflow as tf
 import cgan as cgan
 from scipy.misc import imsave
 from matplotlib import pyplot as plt
+from generator  import generator
 
 
 # from API import IAN
@@ -53,6 +54,7 @@ class fooler():
 
     def imgradRGB(self, c1, r1, c2, r2, RGB, z):
         x_hat = self.model.G_orig
+        # x_hat = generator(self.model.mean, reuse=True)
         # z_t = self.model.latent
         RGB = RGB.swapaxes(1, 3).swapaxes(1, 2)
         # print(RGB.shape)
@@ -64,8 +66,8 @@ class fooler():
         # grad = tf.gradients([expr], [z_t])
         grad = tf.gradients([expr], [self.model.latent])
 
-        grad_out = self.sess.run(
-            grad, feed_dict={self.model.orig: self.X,
+        grad_out, loss   = self.sess.run(
+            [grad, expr], feed_dict={self.model.orig: self.X,
                              self.model.Z: z,
                              self.model.EPS_BS: 1,
                              self.model.TRAIN: False})
@@ -131,17 +133,17 @@ def rb(i):
 def to_tanh(input):
     # print('max tanh')
     # print(np.max(input))
-    return 2.0*(input/255.0)-1.0
+    return input/255.0
     # return 1.0*(input/255.0)
 
 
 def from_tanh(input):
-    return 255.0*(input + 1.0)/2.0
+    return 255.0*input
     #return 255.0*(input)/1.0
 
 
 # Ground truth image
-GIM = np.asarray(np.load('CelebAValid.npz')['arr_0'][420])
+GIM = np.asarray(np.load('CelebAValid2.npz')['arr_0'][420])
 
 # Image for modification
 IM = GIM
@@ -167,7 +169,7 @@ SAMPLE_FLAG = 0
 dim = [10, 10]
 
 # Squared Latent Array
-Z = np.random.uniform(-1.0, 1.0, size=(dim[0], dim[1]))
+Z = np.random.randn(dim[0], dim[1])
 
 # Pixel-wise resolution for latent canvas
 res = 16
@@ -187,8 +189,8 @@ rects = np.zeros((dim[0], dim[1]), dtype=int)
 myRGB = np.zeros((1, 3, 64, 64), dtype=np.float32)
 
 # Canvas width and height
-canvas_width = 400
-canvas_height = 400
+canvas_width = 800
+canvas_height = 800
 
 # border width
 bd = 2
@@ -203,19 +205,32 @@ d.set(12)
 # Selected Color
 mycol = (0, 0, 0)
 
-# Function to update display
+from skimage.transform import resize
 
 
 def update_photo(data=None, widget=None):
+    """
+    # Function to update display
+    if you pass data, it will upsample and paint canvas using data
+    else will use global Z to get a generated image and update canvas"""
     global Z
     # print(Z[:5,0])
     if data is None:  # By default, assume we're updating with the current value of Z
         data = np.repeat(np.repeat(np.uint8(
             from_tanh(model.sample_at(np.float32([Z.flatten()]))[0])), 4, 1), 4, 2)
+        # data = model.sample_at(np.float32([Z.flatten()]))[0]
+
+        # data = resize(data.swapaxes(0,2).swapaxes(0,1), (64*4,64*4))
         # data = np.repeat(np.repeat(np.uint8(
             # from_tanh(model.sample_at(np.float32([Z.flatten()]))[0])), 4, 1), 4, 2)
+        # print('data shape')
+        # print(data.shape)
     else:
         data = np.repeat(np.repeat(np.uint8(data), 4, 1), 4, 2)
+        # data = model.sample_at(np.float32([Z.flatten()]))[0]
+        # data = resize(data.swapaxes(0,2).swapaxes(0,1), (64*4,64*4))
+        # print('data shape')
+        # print(data.shape)
 
     if widget is None:
         widget = output
@@ -225,6 +240,7 @@ def update_photo(data=None, widget=None):
     # print(data[:2, :2, :2])
     im = Image.fromarray(np.concatenate([np.reshape(data[0], mshape), np.reshape(
         data[1], mshape), np.reshape(data[2], mshape)], axis=2), mode='RGB')
+    # im = Image.fromarray(data, mode='RGB')
 
     # Make sure photo is an object of the current widget so the garbage collector doesn't wreck it
 
@@ -256,12 +272,13 @@ def update_canvas(widget=None):
             w.itemconfig(int(rects[i, j]), fill=rb(
                 255*Z[i, j]), outline=rb(255*Z[i, j]))
 
-# Function to move the paintbrush
 
 
 def move_mouse(event):
+    """Function to move the paintbrush""" 
     global output
-    # using a rectangle width equivalent to d/4 (so 1-16)
+    # print('inside move')
+    # using a rectanglee width equivalent to d/4 (so 1-16)
 
     # First, get location and extent of local patch
     x, y = event.x//4, event.y//4
@@ -335,17 +352,17 @@ def paint(event):
     # Get paintbrush location
     [x1, y1, x2, y2] = [int(coordinate) //
                         4 for coordinate in output.coords(pixel_rect)]
+    for _ in range(5):
+        # Get dIM/dZ that minimizes the difference between IM and RGB in the domain of the paintbrush
+        # print(myRGB.shape)
+        # myRGB_temp = myRGB.swapaxes(1, 3).swapaxes(1, 2)
+        # print(myRGB_temp.shape)
+        temp = np.asarray(model.imgradRGB(x1, y1, x2, y2, np.float32(
+            to_tanh(myRGB)), np.float32([Z.flatten()]))[0])
+        grad = temp.reshape((10, 10))*(1+(x2-x1))
 
-    # Get dIM/dZ that minimizes the difference between IM and RGB in the domain of the paintbrush
-    # print(myRGB.shape)
-    # myRGB_temp = myRGB.swapaxes(1, 3).swapaxes(1, 2)
-    # print(myRGB_temp.shape)
-    temp = np.asarray(model.imgradRGB(x1, y1, x2, y2, np.float32(
-        to_tanh(myRGB)), np.float32([Z.flatten()]))[0])
-    grad = temp.reshape((10, 10))*(1+(x2-x1))
-
-    # Update Z
-    Z -= weight*grad
+        # Update Z
+        Z -= weight*grad
 
     # If operating on a sample, update sample
     if SAMPLE_FLAG:
@@ -372,16 +389,28 @@ def paint(event):
         # Update image
         print('MASK')
         print(np.shape(MASK))
+        print(np.min(MASK))
         print(np.max(MASK))
         print('ERROR')
         # ERROR = ERROR[[2, 0, 1], :, :]
         print(np.shape(ERROR))
+        print(np.min(ERROR))
         print(np.max(ERROR))
         print('DELTA')
         print(np.shape(DELTA))
+        print(np.min(DELTA))
         print(np.max(DELTA))
+        print('RECON')
+        print(np.shape(RECON))
+        print(np.min(RECON))
+        print(np.max(RECON))
         # DELTA[:] = 0
         D = MASK*DELTA+(1-MASK)*ERROR
+        print('D')
+        print(np.shape(D))
+        print(np.min(D))
+        print(np.max(D))
+
         # D = (1-MASK)*ERROR
 
         # D = D[[2,1,0],:,:]
@@ -389,11 +418,15 @@ def paint(event):
         print('D')
         print(D.shape)
         print(np.max(D))
-        # IM = np.uint8(from_tanh(to_tanh(RECON)+D))
-        IM = np.uint8(from_tanh(D))
+        IM = from_tanh(to_tanh(RECON)+D)
+        IM -= IM.min()
+        IM /= IM.max()
+        IM = np.uint8(from_tanh(IM))
+        # IM = np.uint8(from_tanh(D))
 
         print('IMAGE')
         print(np.shape(IM))
+        print(np.min(IM))
         print(np.max(IM))
         # Pass updates
         update_canvas(w)
@@ -404,16 +437,16 @@ def paint(event):
 
 
 def infer():
-    global Z, w, GIM, IM, ERROR, RECON, DELTA, USER_MASK, SAMPLE_FLAG
+    global Z, w, GIM, IM, ERROR, RECON, DELTA, USER_MASK, SAMPLE_FLAG, output
     val = myentry.get()
     try:
         val = int(val)
-        GIM = np.asarray(np.load('CelebAValid.npz')['arr_0'][val])
+        GIM = np.asarray(np.load('CelebAValid2.npz')['arr_0'][val])
         IM = GIM
     except ValueError:
         print("No input")
         val = 420
-        GIM = np.asarray(np.load('CelebAValid.npz')['arr_0'][val])
+        GIM = np.asarray(np.load('CelebAValid2.npz')['arr_0'][val])
         IM = GIM
     # myentry.delete(0, END) # Optionally, clear entry after typing it in
 
@@ -497,7 +530,7 @@ def scroll(event):
 
 def sample():
     global Z, output, RECON, IM, ERROR, SAMPLE_FLAG
-    Z = np.random.uniform(-1.0, 1.0, size=(Z.shape[0], Z.shape[1]))
+    Z = np.random.randn(Z.shape[0], Z.shape[1]) # Get Gaussian Sample
     # Z = np.random.uniform(low=-1.0,high=1.0,size=(Z.shape[0],Z.shape[1])) # Optionally get uniform sample
 
     # Update reconstruction and error
@@ -509,16 +542,18 @@ def sample():
     update_photo(None, output)
 
 # Reset to ground-truth image
-
-
 def Reset():
-    global GIM, IM, Z, DELTA, RECON, ERROR, USER_MASK, SAMPLE_FLAG
+    global GIM, IM, Z, DELTA, RECON, ERROR, USER_MASK, SAMPLE_FLAG, output
     IM = GIM
     Z = np.reshape(model.encode_images(np.asarray(
         [to_tanh(IM)], dtype=np.float32))[0], np.shape(Z))
 
     DELTA = np.zeros(np.shape(IM), dtype=np.float32)
     RECON = np.uint8(from_tanh(model.sample_at(np.float32([Z.flatten()]))[0]))
+    print("shape of recon")
+
+    print(RECON.shape)
+    imsave('recon.png',np.float32(RECON.swapaxes(0,2).swapaxes(1,0))/255.0)
     ERROR = to_tanh(np.float32(IM)) - to_tanh(np.float32(RECON))
     USER_MASK *= 0
     SAMPLE_FLAG = 0
@@ -544,7 +579,8 @@ def update_brush(event):
 
 
 def getColor():
-    global myRGB, mycol
+    global myRGB, mycol  #, output
+
     col = askcolor((int(mycol[0]), int(mycol[1]), int(mycol[2])))
     if col[0] is None:
         return  # Dont change color if Cancel pressed.
