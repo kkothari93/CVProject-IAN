@@ -1,6 +1,6 @@
 # CVProject-IAN
 
-This is an implementation of the introspective adverserial networks as proposed by [Brock et al](https://arxiv.org/abs/1609.07093) for a CS543:Computer Vision class project. This project was our first dive into generative modeling into neural nets and hence, we took this opportunity to learn more about the literature in generative modeling and try our hands in implementing various variants that people have presented. All our results were on face images from celebA dataset.
+This is an implementation of the introspective adverserial networks as proposed by [Brock *et al*](https://arxiv.org/abs/1609.07093) for a CS543:Computer Vision class project. This project was our first dive into generative modeling using neural nets and hence, we took this opportunity to learn more about the literature in generative modeling and try our hands in implementing various variants that people have presented. All our results were on face images from celebA dataset.
 
 ## GANs attempted
 
@@ -17,6 +17,12 @@ We coded all GANs from scratch in order to test our understanding of the papers.
 -- We borrowed most of our front end from the original authors of the paper and wrote just an API to interface our models with their specifications.
 
 -- A demo of the interface in action can be found [here](https://www.youtube.com/watch?v=91MqRQ8sTig).
+
+## Things that worked
+
+-- If trained separately, without inference losses and feature losses, all GANs gave comparable results. The traditional GAN gave sharper images but worked only sometimes while the other two never matched the quality. Check out the imgs folder in the repo.
+
+-- The front-end latent space editing worked well but the RGB space editing did not always give semantically meaningful edits. Most of the time it just changed the skin-tone. The lack of controllability should be worked on in the future.
 
 ## Things we could not complete
 
