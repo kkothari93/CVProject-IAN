@@ -9,7 +9,7 @@ def inference_subnet(x, bs, lat_size, reuse=False, TRAIN_FLAG=True):
     with tf.variable_scope('inference_subnet', reuse=reuse):
         h = tcl.fully_connected(
             inputs=h,
-            num_outputs=5*lat_size,
+            num_outputs=3*lat_size,
             activation_fn=tf.nn.relu,
             normalizer_fn=norm,
             normalizer_params=params)

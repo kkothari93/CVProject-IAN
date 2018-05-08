@@ -13,6 +13,7 @@ from discriminator import discriminator
 
 
 def batcher(pattern, batch_size):
+    """TFRecords API"""
     tfrecords_list = glob.glob(pattern)
     batch_op = ip.get_batch_join(tfrecords_list, batch_size, shuffle=True,
                                  num_threads=4, num_epochs=100000)
@@ -21,11 +22,13 @@ def batcher(pattern, batch_size):
 
 
 class CGAN():
+    """Neural net class that integrates all the modules and sets up the training
+    and testing sessions."""
 
     def __init__(self, **kwargs):
 
         # read in kwargs
-        self.results_dir = 'results/'+kwargs.get('results_dir', 'trial/')
+        self.results_dir = 'results/'+kwargs.get('results_dir', 'swgfinal/')
         self.log_dir = self.results_dir + '/LOGS/'
         self.records_loc = kwargs.get(
             'records_loc', './data/celebA_tfrecords/celeba*')
@@ -38,7 +41,7 @@ class CGAN():
         self.lat_size = kwargs.get('lat_size', 100)
         self.ndirs = kwargs.get('ndirs_swd', 10000)
         self.ckpt_freq = kwargs.get('ckpt_freq', 10000)
-        self.batch_size = kwargs.get('batch_size', 128)
+        self.batch_size = kwargs.get('batch_size', 32)
         self.imsave_freq = kwargs.get('imsave_freq', 200)
         self.cons_out_freq = kwargs.get('cons_out_freq', 50)
         self.disc_update_iter = kwargs.get('disc_update_iter', 1)
@@ -58,6 +61,10 @@ class CGAN():
         self.EPS_BS = tf.placeholder(tf.int32, name='eps_batch_size')
 
         self.build_model()
+        self.data = np.load('/tmp/cropped_celeba.npy')
+        self.nsamples = len(self.data)
+        print('read %d samples.'%self.nsamples)
+
         print("Graph built!")
 
     def estimate_swd(self, g_features, r_features):
@@ -88,7 +95,7 @@ class CGAN():
 
         # generator ops
         # original reconstruction
-        self.G_orig = generator(self.latent, TRAIN_FLAG=self.TRAIN)
+        self.G_orig = generator(self.mean, TRAIN_FLAG=self.TRAIN)
         # samples from generator
         self.G_samp = generator(self.Z, reuse=True, TRAIN_FLAG=self.TRAIN)
 
@@ -179,16 +186,18 @@ class CGAN():
                 learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(self.G_loss,
                                                                    var_list=theta_G)
             self.tot_optimizer = tf.train.AdamOptimizer(
-                learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(self.tot_loss,
+                learning_rate=5e-3, beta1=0.5, beta2=0.9).minimize(self.tot_loss,
                                                                    var_list=theta_inet)
 
         self.summary = tf.summary.merge_all()
 
     def get_batcher(self):
+        """TFRecords API"""
         batch_op = batcher(self.records_loc, self.batch_size)
         return batch_op
 
     def load(self, dirname):
+        """Loads the latest checkpoint from directory"""
         saver = tf.train.Saver()
 
         config = tf.ConfigProto()
@@ -200,6 +209,7 @@ class CGAN():
 
 
     def train(self, iters):
+        """sets up training"""
 
         batch_op = self.get_batcher()
         saver = tf.train.Saver()
@@ -224,7 +234,9 @@ class CGAN():
 
         """Start training"""
         for it in range(iters):
-            orig_mb = sess.run(batch_op)
+            # orig_mb = sess.run(batch_op)
+            idx = np.random.choice(np.arange(self.nsamples), self.batch_size, replace=False)
+            orig_mb = self.data[idx]
 
             if coord.should_stop():
                 break
@@ -242,8 +254,8 @@ class CGAN():
                     self.TRAIN: True
                 })
 
-                out_arr = samples[:64].reshape(
-                    8, 8, 64, 64, 3).swapaxes(1, 2).reshape(8*64, -1, 3)
+                out_arr = samples[:16].reshape(
+                    4, 4, 64, 64, 3).swapaxes(1, 2).reshape(4*64, -1, 3)
 
                 imsave(self.results_dir+'%d.png' % it, out_arr)
 
@@ -279,13 +291,13 @@ class CGAN():
                 self.TRAIN: True,
                 self.EPS_BS: self.batch_size})
 
+
             _, tot_loss_curr = sess.run([self.tot_optimizer, self.tot_loss], feed_dict={
                 self.orig: orig_mb,
                 self.TRAIN: True,
                 self.Z: z_samp,
                 self.EPS_BS: self.batch_size})
 
-            # print("Got here v2!")
 
             if it % self.cons_out_freq == 0:
                 print('That took %f s' % (time.time()-t))
@@ -327,7 +339,7 @@ def testCGAN():
     """Tester function for CGAN"""
     # args = ap.get_kwargs()
     net = CGAN()
-    net.train(200000)
+    net.train(150000)
     net.sample(40)
 
     return True
